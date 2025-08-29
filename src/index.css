@@ -1,0 +1,85 @@
+/* src/index.css */
+
+/* ---- Base / Reset ---- */
+:root {
+  --bg-page: #f5f6f8;
+  --text-main: #111827;          /* gray-900 */
+  --tab-hover: #f3f4f6;          /* gray-100 */
+  --tab-active-bg: #111827;      /* gray-900 */
+  --tab-active-text: #ffffff;
+  --focus: #3b82f6;              /* blue-500 */
+}
+
+html, body, #root { height: 100%; }
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--bg-page);
+  color: var(--text-main);
+  font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol", sans-serif;
+  line-height: 1.5;
+}
+
+/* ---- Global link behavior (no purple, no underline) ---- */
+a,
+a:link,
+a:visited,
+a:hover,
+a:active,
+a:focus {
+  color: inherit !important;
+  text-decoration: none !important;
+}
+
+/* Nice focus ring for keyboard users */
+:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+/* Hide horizontal scrollbar on small tab strips (used in AppNav) */
+.no-scrollbar::-webkit-scrollbar { display: none; }
+.no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+
+/* ======================================================================== */
+/* Header / Top Nav tweaks — pill tabs with good spacing and no underlines  */
+/* ======================================================================== */
+
+header nav a,
+header nav a:link,
+header nav a:visited,
+header nav a:hover,
+header nav a:active {
+  display: inline-block;
+  color: var(--text-main) !important;
+  text-decoration: none !important;
+  padding: 0.5rem 0.75rem;       /* ~ px-3 py-2 */
+  border-radius: 0.5rem;         /* rounded-md */
+  line-height: 1.25rem;          /* match Tailwind text-sm line-height */
+  transition: background-color 120ms ease, color 120ms ease, box-shadow 120ms ease;
+}
+
+/* hover style */
+header nav a:hover {
+  background: var(--tab-hover);
+}
+
+/* active tab (NavLink sets aria-current="page") */
+header nav a[aria-current="page"] {
+  background: var(--tab-active-bg) !important;
+  color: var(--tab-active-text) !important;
+  box-shadow: 0 1px 2px rgba(0,0,0,0.06);
+}
+
+/* Optional: a little extra spacing between tabs if Tailwind gap is too tight */
+header nav a + a {
+  margin-left: 0.25rem; /* ~gap-1; adjust if needed */
+}
+
+/* Optional: make the header container breathe on small screens */
+header .tab-strip {
+  padding-bottom: 0.5rem; /* matches pb-2/3 */
+}
+
+/* You can add any truly global utility tweaks below if needed */
