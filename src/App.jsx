@@ -11,9 +11,8 @@ import {
 import Leaderboard from "./components/Leaderboard";
 import WeeklyLeaderboard from "./pages/WeeklyLeaderboard";
 
-// NOTE: your files are lowercase (login.jsx, dashboard.jsx)
-import Login from "./pages/login";
-import Dashboard from "./pages/dashboard";
+import Login from "./pages/Login.jsx";
+import Dashboard from "./pages/Dashboard.jsx";
 
 import HowToPlay from "./pages/HowToPlay";
 import PicksForm from "./pages/PicksForm";
