@@ -10,8 +10,12 @@ import {
 
 import Leaderboard from "./components/Leaderboard";
 import WeeklyLeaderboard from "./pages/WeeklyLeaderboard";
-import Login from "./pages/Login";
-import Dashboard from "./pages/Dashboard";
+
+// NOTE: your files are lowercase (login.jsx, dashboard.jsx)
+import Login from "./pages/login";
+import Dashboard from "./pages/dashboard";
+
+import HowToPlay from "./pages/HowToPlay";
 import PicksForm from "./pages/PicksForm";
 import Admin from "./pages/Admin";
 import AdminUsers from "./pages/AdminUsers";
@@ -24,7 +28,7 @@ import { AuthProvider, useAuth } from "./context/AuthContext";
 import ProtectedRoute from "./components/ProtectedRoute";
 import AppNav from "./components/AppNav";
 
-/** Scroll to top on route change (tiny UX polish) */
+/** Scroll to top on route change */
 function ScrollToTop() {
   const { pathname } = useLocation();
   React.useEffect(() => {
@@ -65,7 +69,12 @@ function AppContent() {
         {/* Public root (auto-redirects to /dashboard if already logged in) */}
         <Route path="/" element={<PublicEntry />} />
 
-        {/* Picks (default -> week 1; can be changed to current week later) */}
+        {/* Public: How to Play / Rules */}
+        <Route path="/how-to-play" element={<HowToPlay />} />
+        {/* Nice alias */}
+        <Route path="/rules" element={<Navigate to="/how-to-play" replace />} />
+
+        {/* Picks (default -> week 1) */}
         <Route
           path="/picks/:week"
           element={
@@ -147,6 +156,8 @@ function AppContent() {
         <a href="/privacy" className="underline hover:text-gray-700">Privacy</a>
         {" • "}
         <a href="/terms" className="underline hover:text-gray-700">Terms</a>
+        {" • "}
+        <a href="/how-to-play" className="underline hover:text-gray-700">How to Play</a>
       </footer>
     </div>
   );
