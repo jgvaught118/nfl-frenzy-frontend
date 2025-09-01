@@ -6,10 +6,105 @@ import { useAuth } from "../context/AuthContext";
 
 const TOTAL_WEEKS = 18;
 
+/** Inline Highlights panel (so you don't need a separate file) */
+function HighlightsPanel({ week, className = "" }) {
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState("");
+
+  useEffect(() => {
+    let done = false;
+    async function run() {
+      try {
+        setLoading(true);
+        setErr("");
+        const url = `${import.meta.env.VITE_BACKEND_URL}/games/highlights/${week}`;
+        const res = await axios.get(url);
+        if (!done) setData(res.data?.data || null);
+      } catch (e) {
+        if (!done) setErr("Could not load highlights.");
+      } finally {
+        if (!done) setLoading(false);
+      }
+    }
+    run();
+    return () => {
+      done = true;
+    };
+  }, [week]);
+
+  if (loading) {
+    return (
+      <div className={`rounded-xl border p-4 bg-white shadow-sm ${className}`}>
+        <div className="text-sm text-gray-500">Loading highlights…</div>
+      </div>
+    );
+  }
+
+  if (err || !data) {
+    return (
+      <div className={`rounded-xl border p-4 bg-white shadow-sm ${className}`}>
+        <div className="text-sm text-red-600">{err || "No highlights available."}</div>
+      </div>
+    );
+  }
+
+  const { gotw, potw } = data;
+
+  return (
+    <div className={`grid gap-4 md:grid-cols-2 ${className}`}>
+      {/* GOTW */}
+      <div className="rounded-xl border p-4 bg-white shadow-sm">
+        <div className="text-xs font-semibold uppercase tracking-wide text-gray-500 mb-2">
+          Game of the Week
+        </div>
+        {gotw ? (
+          <>
+            <div className="text-lg font-semibold text-gray-900">
+              {gotw.away_team} @ {gotw.home_team}
+            </div>
+            {gotw.start_time && (
+              <div className="text-sm text-gray-600 mt-1">
+                Kickoff: {new Date(gotw.start_time).toLocaleString()}
+              </div>
+            )}
+            <div className="text-sm text-gray-700 mt-3">
+              Enter your <b>total points</b> prediction for this matchup below.
+            </div>
+          </>
+        ) : (
+          <div className="text-sm text-gray-500">No GOTW set for week {week}.</div>
+        )}
+      </div>
+
+      {/* POTW */}
+      <div className="rounded-xl border p-4 bg-white shadow-sm">
+        <div className="text-xs font-semibold uppercase tracking-wide text-gray-500 mb-2">
+          Player of the Week
+        </div>
+        {potw ? (
+          <>
+            <div className="text-lg font-semibold text-gray-900">
+              {potw.player}
+              {potw.team ? <span className="text-gray-600 font-normal"> — {potw.team}</span> : null}
+            </div>
+            <div className="text-sm text-gray-700 mt-3">
+              Enter your <b>total yards</b> prediction for this player below.
+            </div>
+          </>
+        ) : (
+          <div className="text-sm text-gray-500">No POTW set for week {week}.</div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 export default function PicksForm() {
   const { user } = useAuth();
   const navigate = useNavigate();
-  const { week } = useParams();
+  const { week: weekParam } = useParams();
+  const week = Number(weekParam || 1);
 
   const [games, setGames] = useState([]);
   const [pickedTeams, setPickedTeams] = useState([]);              // teams user already used this season
@@ -17,6 +112,10 @@ export default function PicksForm() {
   const [existingPickTeam, setExistingPickTeam] = useState("");    // team already submitted for this week (if any)
   const [potwPrediction, setPotwPrediction] = useState("");
   const [gotwPrediction, setGotwPrediction] = useState("");
+
+  // highlights context
+  const [gotwContext, setGotwContext] = useState(null);
+  const [potwContext, setPotwContext] = useState(null);
 
   const [loading, setLoading] = useState(true);
 
@@ -43,7 +142,6 @@ export default function PicksForm() {
   };
 
   const kickoffDate = (g) => {
-    // Support multiple shapes from backend
     const val = g.kickoff ?? g.start_time ?? g.kickoff_time;
     const d = new Date(val);
     return isNaN(d.getTime()) ? null : d;
@@ -67,7 +165,6 @@ export default function PicksForm() {
   };
 
   const computeFirstSundayKickoff = (gamesList) => {
-    // Use UTC weekday to identify Sunday reliably
     const sundays = gamesList
       .map(kickoffDate)
       .filter((d) => d && d.getUTCDay() === 0) // 0 = Sunday
@@ -147,9 +244,21 @@ export default function PicksForm() {
             makeCountdown(firstSunday);
           }
         } else {
-          // If no Sunday games (rare), keep only per-game locks
           setGlobalLocked(false);
           setCountdown("");
+        }
+
+        // 6) Highlights context (GOTW/POTW)
+        try {
+          const hRes = await axios.get(
+            `${import.meta.env.VITE_BACKEND_URL}/games/highlights/${week}`
+          );
+          const h = hRes.data?.data || null;
+          setGotwContext(h?.gotw || null);
+          setPotwContext(h?.potw || null);
+        } catch {
+          setGotwContext(null);
+          setPotwContext(null);
         }
       } catch (err) {
         console.error("Error loading picks form:", err);
@@ -260,6 +369,9 @@ export default function PicksForm() {
         </select>
       </div>
 
+      {/* NEW: Highlights (GOTW & POTW) */}
+      <HighlightsPanel week={week} className="mb-6" />
+
       {!!countdown && (
         <div className="mb-4 p-3 rounded bg-red-50 border border-red-200 text-red-700">
           {countdown}
@@ -369,10 +481,17 @@ export default function PicksForm() {
           );
         })}
 
-        {/* GOTW / POTW inputs */}
+        {/* GOTW / POTW inputs (now with live context) */}
         <div className="grid grid-cols-1 gap-4">
           <div>
-            <label className="block mb-1 font-medium">GOTW Total Points</label>
+            <label className="block mb-1 font-medium">
+              GOTW Total Points
+              {gotwContext ? (
+                <span className="ml-2 text-xs text-gray-600">
+                  ({gotwContext.away_team} @ {gotwContext.home_team})
+                </span>
+              ) : null}
+            </label>
             <input
               type="number"
               min={0}
@@ -384,7 +503,14 @@ export default function PicksForm() {
             />
           </div>
           <div>
-            <label className="block mb-1 font-medium">POTW Yardage</label>
+            <label className="block mb-1 font-medium">
+              POTW Yardage
+              {potwContext ? (
+                <span className="ml-2 text-xs text-gray-600">
+                  ({potwContext.player}{potwContext.team ? ` — ${potwContext.team}` : ""})
+                </span>
+              ) : null}
+            </label>
             <input
               type="number"
               min={0}
@@ -410,13 +536,13 @@ export default function PicksForm() {
             Submit Picks
           </button>
 
-            <button
-              type="button"
-              onClick={() => navigate(`/leaderboard/week/${week}`)}
-              className="mt-2 px-6 py-2 rounded bg-emerald-600 text-white hover:bg-emerald-700"
-            >
-              Weekly Leaderboard
-            </button>
+          <button
+            type="button"
+            onClick={() => navigate(`/leaderboard/week/${week}`)}
+            className="mt-2 px-6 py-2 rounded bg-emerald-600 text-white hover:bg-emerald-700"
+          >
+            Weekly Leaderboard
+          </button>
         </div>
       </form>
     </div>
