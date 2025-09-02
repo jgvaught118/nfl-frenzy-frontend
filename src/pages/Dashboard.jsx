@@ -25,57 +25,96 @@ const Dashboard = () => {
     []
   );
 
+  // Helpers to compute first Sunday kickoff for a week’s games
+  const kickoffDate = (g) => {
+    const val = g.kickoff ?? g.start_time ?? g.kickoff_time;
+    const d = new Date(val);
+    return isNaN(d.getTime()) ? null : d;
+  };
+  const firstSundayKickoff = (games) => {
+    const sundays = (games || [])
+      .map(kickoffDate)
+      .filter((d) => d && d.getUTCDay() === 0) // 0 = Sunday (UTC-safe)
+      .sort((a, b) => a - b);
+    return sundays[0] || null;
+  };
+
   useEffect(() => {
     const fetchData = async () => {
       try {
         if (!user?.id) return;
 
-        // 1) Current week number (we intentionally ignore any "locked" flag here,
-        //    because we want the Dashboard to remain editable until the *actual*
-        //    global lock time; the Picks page enforces that for real).
+        // 1) Current week number (ignore “locked” flags coming from here)
         const wkRes = await axios.get(
           `${import.meta.env.VITE_BACKEND_URL}/admin/current_week`
         );
-
         const payload = wkRes.data || {};
         const cw =
           payload.current_week !== undefined ? payload.current_week : payload;
         const weekNumber =
           (typeof cw === "object" ? cw.week_number || cw.week : cw) || 1;
+        const cur = Number(weekNumber) || 1;
+        setCurrentWeek(cur);
 
-        setCurrentWeek(Number(weekNumber));
-
-        // 2) Build display list for all weeks
-        //    Past weeks are locked; current/future weeks are unlocked from Dashboard perspective.
-        const generatedWeeks = Array.from({ length: TOTAL_WEEKS }, (_, i) => {
-          const weekNum = i + 1;
-          const isPast = weekNum < weekNumber;
-          const isCurrent = weekNum === weekNumber;
-
+        // 2) Build initial display — past weeks locked, current/future unlocked
+        const list = Array.from({ length: TOTAL_WEEKS }, (_, i) => {
+          const w = i + 1;
           return {
-            week_number: weekNum,
-            is_locked: isPast,   // ✅ only past weeks locked here
-            is_current: isCurrent,
+            week_number: w,
+            is_current: w === cur,
+            is_locked: w < cur, // provisional; we’ll override below using real kickoff when we can
           };
         });
-        setWeeks(generatedWeeks);
 
-        // 3) Your season picks (private)
+        // 3) Fetch your season picks (so we can show the “Submitted — Edit” chip)
         const picksRes = await axios.get(
           `${import.meta.env.VITE_BACKEND_URL}/picks/season/private`,
           { params: { user_id: user.id }, ...axiosAuth }
         );
-
         const byWeek = {};
         (picksRes.data || []).forEach((p) => {
-          if (p && typeof p.week !== "undefined") {
-            byWeek[p.week] = p;
-          }
+          if (p && typeof p.week !== "undefined") byWeek[p.week] = p;
         });
         setUserPicks(byWeek);
+
+        // 4) Refine locks with REAL first-Sunday times for:
+        //    - the current week
+        //    - the previous week (e.g., Week 1 when backend already rolled to Week 2)
+        const weeksToCheck = [cur, cur - 1].filter((w) => w >= 1 && w <= TOTAL_WEEKS);
+
+        const overrides = await Promise.all(
+          weeksToCheck.map(async (w) => {
+            try {
+              const res = await axios.get(
+                `${import.meta.env.VITE_BACKEND_URL}/games/week/${w}`
+              );
+              const games = Array.isArray(res.data) ? res.data : [];
+              const first = firstSundayKickoff(games);
+              if (!first) return { week: w, locked: false }; // no Sunday => don’t lock
+              const locked = new Date() >= first;
+              return { week: w, locked };
+            } catch {
+              return { week: w, locked: w < cur }; // fallback to provisional
+            }
+          })
+        );
+
+        // Apply overrides to the two weeks we just checked
+        const refined = list.map((row) => {
+          const ov = overrides.find((o) => o.week === row.week_number);
+          if (!ov) return row;
+          return {
+            ...row,
+            is_locked: ov.locked && row.week_number < cur ? true : ov.locked,
+            // logic note: for previous week, ov.locked accurately reflects whether its first Sunday passed
+            // for current week, ov.locked will be false before Sunday (so stays editable)
+          };
+        });
+
+        setWeeks(refined);
       } catch (err) {
         console.error("Error fetching dashboard data:", err);
-        // Safe fallback UI so the page still renders
+        // Safe fallback UI
         const fallbackWeeks = Array.from({ length: TOTAL_WEEKS }, (_, i) => ({
           week_number: i + 1,
           is_locked: false,
@@ -91,27 +130,17 @@ const Dashboard = () => {
     fetchData();
   }, [user?.id, axiosAuth]);
 
-  const goToWeek = (weekNumber) => {
-    navigate(`/picks/${weekNumber}`);
-  };
-
-  const goToOverallLeaderboard = () => {
-    navigate("/leaderboard/overall");
-  };
-
+  const goToWeek = (weekNumber) => navigate(`/picks/${weekNumber}`);
+  const goToOverallLeaderboard = () => navigate("/leaderboard/overall");
   const goToWeeklyLeaderboard = () => {
     const qs = window.location.search || "";
     navigate(`/leaderboard/week/${currentWeek}${qs}`);
   };
-
-  const goToAdmin = () => {
-    navigate("/admin");
-  };
+  const goToAdmin = () => navigate("/admin");
 
   const showTooltip = (weekNumber) => {
     setTooltipWeek(weekNumber);
     setTooltipVisible(true);
-
     setTimeout(() => {
       setTooltipVisible(false);
       setTimeout(() => setTooltipWeek(null), 300);
@@ -126,7 +155,8 @@ const Dashboard = () => {
         Welcome, {user?.first_name || "User"}!
       </h2>
       <p className="mb-4 text-gray-700">
-        Make or edit your weekly pick. Past weeks are locked; current week remains editable here until the official lock. The Picks page always enforces the actual lock time.
+        Make or edit your weekly pick. Past weeks lock after the first Sunday
+        kickoff; the Picks page always enforces the actual lock time.
       </p>
 
       {/* Week Selector */}
@@ -136,28 +166,29 @@ const Dashboard = () => {
           const baseClasses =
             "px-4 py-2 rounded border transition-all duration-200 font-medium flex justify-between items-center relative";
 
-          // Styling
           let bgClass = "bg-gray-100 text-black";
           if (wk.is_locked) bgClass = "bg-gray-300 text-gray-500";
           else if (wk.is_current) bgClass = "bg-green-600 text-white";
 
-          // Label
           let label = `Week ${wk.week_number}`;
           if (wk.is_locked) label += " 🔒";
           if (wk.is_current && !wk.is_locked) label += " 🟢";
+
+          const canClick = !wk.is_locked;
 
           return (
             <div key={wk.week_number} className="relative">
               <button
                 onClick={() => {
-                  // Past weeks aren't clickable; current/future are always clickable from Dashboard.
-                  if (!wk.is_locked) {
+                  if (canClick) {
                     goToWeek(wk.week_number);
                     if (pick) showTooltip(wk.week_number);
                   }
                 }}
-                className={`${baseClasses} ${bgClass} ${wk.is_locked ? "cursor-not-allowed" : "cursor-pointer"}`}
-                disabled={wk.is_locked}
+                className={`${baseClasses} ${bgClass} ${
+                  canClick ? "cursor-pointer" : "cursor-not-allowed"
+                }`}
+                disabled={!canClick}
                 title={
                   wk.is_locked
                     ? "Past week — locked"
@@ -167,8 +198,6 @@ const Dashboard = () => {
                 }
               >
                 <span>{label}</span>
-
-                {/* Right side chip: Submitted / Edit */}
                 {!wk.is_locked && (
                   <span
                     className={[
@@ -185,7 +214,7 @@ const Dashboard = () => {
                 )}
               </button>
 
-              {/* Tooltip w/ your pick snapshot */}
+              {/* Tooltip snapshot of your pick */}
               {pick && tooltipWeek === wk.week_number && (
                 <div
                   className={`absolute left-full ml-2 top-0 w-64 p-3 bg-gray-800 text-white text-sm rounded shadow-lg z-50 transition-opacity duration-300 ${
