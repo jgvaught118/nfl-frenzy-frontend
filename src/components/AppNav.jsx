@@ -7,11 +7,12 @@ import { useAuth } from "../context/AuthContext";
 function pill(isActive) {
   return [
     "inline-flex items-center rounded-full px-3 py-2 text-sm font-medium",
+    // kill visited underline/purple:
     "no-underline visited:no-underline visited:text-gray-800",
     isActive
       ? "bg-blue-600 text-white shadow-sm"
       : "bg-white text-gray-800 ring-1 ring-gray-200 hover:bg-gray-50",
-    "transition-colors",
+    "transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500",
   ].join(" ");
 }
 
@@ -20,15 +21,19 @@ export default function AppNav() {
   const navigate = useNavigate();
   const location = useLocation();
 
+  // Hide nav on login route
   if (!user || location.pathname === "/") return null;
 
   const [currentWeek, setCurrentWeek] = useState(1);
   const [open, setOpen] = useState(false);
 
+  // Close mobile menu automatically on route change
+  useEffect(() => {
+    setOpen(false);
+  }, [location.pathname]);
+
   const axiosAuth = useMemo(
-    () => ({
-      headers: { Authorization: `Bearer ${localStorage.getItem("token")}` },
-    }),
+    () => ({ headers: { Authorization: `Bearer ${localStorage.getItem("token")}` } }),
     []
   );
 
@@ -50,6 +55,23 @@ export default function AppNav() {
       alive = false;
     };
   }, [axiosAuth]);
+
+  // Single source of truth for links
+  const baseLinks = [
+    { to: "/dashboard", label: "Dashboard" },
+    { to: `/picks/${currentWeek}`, label: "Weekly Picks" },
+    { to: `/leaderboard/week/${currentWeek}`, label: "Weekly Leaderboard" },
+    { to: "/leaderboard/overall", label: "Overall Leaderboard" },
+    { to: "/how-to-play", label: "How to Play" },
+  ];
+
+  const adminLinks = user?.is_admin
+    ? [
+        { to: "/admin", label: "Admin" },
+        { to: "/admin/users", label: "Manage Users" },
+        { to: "/admin/email", label: "Email" },
+      ]
+    : [];
 
   return (
     <header className="sticky top-0 z-40 border-b border-gray-200 bg-white/90 backdrop-blur">
@@ -101,154 +123,48 @@ export default function AppNav() {
 
         {/* Tabs */}
         <nav className="pb-3">
-          {/* Desktop pills */}
+          {/* Desktop pills (no duplication, one map) */}
           <div className="hidden md:flex flex-wrap items-center gap-2 sm:gap-3">
-            <NavLink to="/dashboard" className={({ isActive }) => pill(isActive)}>
-              Dashboard
-            </NavLink>
-            <NavLink
-              to={`/picks/${currentWeek}`}
-              className={({ isActive }) => pill(isActive)}
-            >
-              Weekly Picks
-            </NavLink>
-            <NavLink
-              to={`/leaderboard/week/${currentWeek}`}
-              className={({ isActive }) => pill(isActive)}
-            >
-              Weekly Leaderboard
-            </NavLink>
-            <NavLink
-              to="/leaderboard/overall"
-              className={({ isActive }) => pill(isActive)}
-            >
-              Overall Leaderboard
-            </NavLink>
-            <NavLink
-              to="/how-to-play"
-              className={({ isActive }) => pill(isActive)}
-            >
-              How to Play
-            </NavLink>
+            {baseLinks.map((l) => (
+              <NavLink key={l.to} to={l.to} className={({ isActive }) => pill(isActive)}>
+                {l.label}
+              </NavLink>
+            ))}
 
-            {user?.is_admin && (
-              <>
-                <div className="mx-1 hidden h-5 w-px bg-gray-200 md:block" />
-                <NavLink to="/admin" className={({ isActive }) => pill(isActive)}>
-                  Admin
-                </NavLink>
-                <NavLink to="/admin/users" className={({ isActive }) => pill(isActive)}>
-                  Manage Users
-                </NavLink>
-                <NavLink to="/admin/email" className={({ isActive }) => pill(isActive)}>
-                  Email
-                </NavLink>
-              </>
-            )}
+            {adminLinks.length > 0 && <div className="mx-1 h-5 w-px bg-gray-200" />}
+
+            {adminLinks.map((l) => (
+              <NavLink key={l.to} to={l.to} className={({ isActive }) => pill(isActive)}>
+                {l.label}
+              </NavLink>
+            ))}
           </div>
 
-          {/* Mobile list */}
+          {/* Mobile list (collapsible) */}
           <div
             className={`md:hidden overflow-hidden transition-[max-height] duration-300 ${
-              open ? "max-h-80" : "max-h-0"
+              open ? "max-h-96" : "max-h-0"
             }`}
           >
-            <div className="grid gap-2 pt-2 pb-3">
-              <NavLink
-                to="/dashboard"
-                className={({ isActive }) =>
-                  `rounded-lg px-3 py-2 no-underline visited:no-underline ${
-                    isActive ? "bg-blue-50 text-blue-700" : "hover:bg-gray-50"
-                  }`
-                }
-                onClick={() => setOpen(false)}
-              >
-                Dashboard
-              </NavLink>
-              <NavLink
-                to={`/picks/${currentWeek}`}
-                className={({ isActive }) =>
-                  `rounded-lg px-3 py-2 no-underline visited:no-underline ${
-                    isActive ? "bg-blue-50 text-blue-700" : "hover:bg-gray-50"
-                  }`
-                }
-                onClick={() => setOpen(false)}
-              >
-                Weekly Picks
-              </NavLink>
-              <NavLink
-                to={`/leaderboard/week/${currentWeek}`}
-                className={({ isActive }) =>
-                  `rounded-lg px-3 py-2 no-underline visited:no-underline ${
-                    isActive ? "bg-blue-50 text-blue-700" : "hover:bg-gray-50"
-                  }`
-                }
-                onClick={() => setOpen(false)}
-              >
-                Weekly Leaderboard
-              </NavLink>
-              <NavLink
-                to="/leaderboard/overall"
-                className={({ isActive }) =>
-                  `rounded-lg px-3 py-2 no-underline visited:no-underline ${
-                    isActive ? "bg-blue-50 text-blue-700" : "hover:bg-gray-50"
-                  }`
-                }
-                onClick={() => setOpen(false)}
-              >
-                Overall Leaderboard
-              </NavLink>
-              <NavLink
-                to="/how-to-play"
-                className={({ isActive }) =>
-                  `rounded-lg px-3 py-2 no-underline visited:no-underline ${
-                    isActive ? "bg-blue-50 text-blue-700" : "hover:bg-gray-50"
-                  }`
-                }
-                onClick={() => setOpen(false)}
-              >
-                How to Play
-              </NavLink>
-
-              {user?.is_admin && (
-                <>
-                  <div className="mt-1 px-3 text-xs font-semibold uppercase tracking-wide text-gray-500">
-                    Admin
-                  </div>
-                  <NavLink
-                    to="/admin"
-                    className={({ isActive }) =>
-                      `rounded-lg px-3 py-2 no-underline visited:no-underline ${
-                        isActive ? "bg-blue-50 text-blue-700" : "hover:bg-gray-50"
-                      }`
-                    }
-                    onClick={() => setOpen(false)}
-                  >
-                    Admin Home
-                  </NavLink>
-                  <NavLink
-                    to="/admin/users"
-                    className={({ isActive }) =>
-                      `rounded-lg px-3 py-2 no-underline visited:no-underline ${
-                        isActive ? "bg-blue-50 text-blue-700" : "hover:bg-gray-50"
-                      }`
-                    }
-                    onClick={() => setOpen(false)}
-                  >
-                    Manage Users
-                  </NavLink>
-                  <NavLink
-                    to="/admin/email"
-                    className={({ isActive }) =>
-                      `rounded-lg px-3 py-2 no-underline visited:no-underline ${
-                        isActive ? "bg-blue-50 text-blue-700" : "hover:bg-gray-50"
-                      }`
-                    }
-                    onClick={() => setOpen(false)}
-                  >
-                    Email Tools
-                  </NavLink>
-                </>
+            <div className="grid gap-1 pt-2 pb-3">
+              {[...baseLinks, ...(adminLinks.length ? [{ divider: true }, ...adminLinks] : [])].map(
+                (l, i) =>
+                  l.divider ? (
+                    <div key={`div-${i}`} className="mx-3 my-1 h-px bg-gray-200" />
+                  ) : (
+                    <NavLink
+                      key={l.to}
+                      to={l.to}
+                      className={({ isActive }) =>
+                        `rounded-lg px-3 py-2 no-underline visited:no-underline ${
+                          isActive ? "bg-blue-50 text-blue-700" : "hover:bg-gray-50"
+                        }`
+                      }
+                      onClick={() => setOpen(false)}
+                    >
+                      {l.label}
+                    </NavLink>
+                  )
               )}
 
               <button
