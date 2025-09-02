@@ -7,13 +7,13 @@ import { useAuth } from "../context/AuthContext";
 const TOTAL_WEEKS = 18;
 const TOOLTIP_DURATION = 4000; // 4 seconds
 
-const Dashboard = () => {
+export default function Dashboard() {
   const { user, logout } = useAuth();
   const navigate = useNavigate();
 
-  const [weeks, setWeeks] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [currentWeek, setCurrentWeek] = useState(1);
+  const [currentWeekDisplay, setCurrentWeekDisplay] = useState(1); // computed “current” week based on first Sunday
+  const [weekRows, setWeekRows] = useState([]);                    // [{week_number, is_locked, is_current}]
   const [userPicks, setUserPicks] = useState({});
   const [tooltipWeek, setTooltipWeek] = useState(null);
   const [tooltipVisible, setTooltipVisible] = useState(false);
@@ -25,7 +25,6 @@ const Dashboard = () => {
     []
   );
 
-  // Helpers to compute first Sunday kickoff for a week’s games
   const kickoffDate = (g) => {
     const val = g.kickoff ?? g.start_time ?? g.kickoff_time;
     const d = new Date(val);
@@ -34,39 +33,18 @@ const Dashboard = () => {
   const firstSundayKickoff = (games) => {
     const sundays = (games || [])
       .map(kickoffDate)
-      .filter((d) => d && d.getUTCDay() === 0) // 0 = Sunday (UTC-safe)
+      .filter((d) => d && d.getUTCDay() === 0) // Sunday in UTC
       .sort((a, b) => a - b);
     return sundays[0] || null;
   };
 
   useEffect(() => {
-    const fetchData = async () => {
+    if (!user?.id) return;
+
+    const run = async () => {
+      setLoading(true);
       try {
-        if (!user?.id) return;
-
-        // 1) Current week number (ignore “locked” flags coming from here)
-        const wkRes = await axios.get(
-          `${import.meta.env.VITE_BACKEND_URL}/admin/current_week`
-        );
-        const payload = wkRes.data || {};
-        const cw =
-          payload.current_week !== undefined ? payload.current_week : payload;
-        const weekNumber =
-          (typeof cw === "object" ? cw.week_number || cw.week : cw) || 1;
-        const cur = Number(weekNumber) || 1;
-        setCurrentWeek(cur);
-
-        // 2) Build initial display — past weeks locked, current/future unlocked
-        const list = Array.from({ length: TOTAL_WEEKS }, (_, i) => {
-          const w = i + 1;
-          return {
-            week_number: w,
-            is_current: w === cur,
-            is_locked: w < cur, // provisional; we’ll override below using real kickoff when we can
-          };
-        });
-
-        // 3) Fetch your season picks (so we can show the “Submitted — Edit” chip)
+        // --- A) Season picks for this user (for chips & tooltip) ---
         const picksRes = await axios.get(
           `${import.meta.env.VITE_BACKEND_URL}/picks/season/private`,
           { params: { user_id: user.id }, ...axiosAuth }
@@ -77,64 +55,76 @@ const Dashboard = () => {
         });
         setUserPicks(byWeek);
 
-        // 4) Refine locks with REAL first-Sunday times for:
-        //    - the current week
-        //    - the previous week (e.g., Week 1 when backend already rolled to Week 2)
-        const weeksToCheck = [cur, cur - 1].filter((w) => w >= 1 && w <= TOTAL_WEEKS);
+        // --- B) (Optional) backend current week as fallback only ---
+        let backendCurrentWeek = 1;
+        try {
+          const wkRes = await axios.get(
+            `${import.meta.env.VITE_BACKEND_URL}/admin/current_week`
+          );
+          const payload = wkRes.data || {};
+          const cw =
+            payload.current_week !== undefined ? payload.current_week : payload;
+          backendCurrentWeek =
+            Number(typeof cw === "object" ? cw.week_number || cw.week : cw) || 1;
+        } catch {
+          backendCurrentWeek = 1;
+        }
 
-        const overrides = await Promise.all(
-          weeksToCheck.map(async (w) => {
+        // --- C) Compute each week’s first-Sunday kickoff (all 18) ---
+        const now = new Date();
+        const meta = await Promise.all(
+          Array.from({ length: TOTAL_WEEKS }, async (_, idx) => {
+            const w = idx + 1;
             try {
               const res = await axios.get(
                 `${import.meta.env.VITE_BACKEND_URL}/games/week/${w}`
               );
               const games = Array.isArray(res.data) ? res.data : [];
               const first = firstSundayKickoff(games);
-              if (!first) return { week: w, locked: false }; // no Sunday => don’t lock
-              const locked = new Date() >= first;
-              return { week: w, locked };
+              if (!first) {
+                // No Sunday game → treat as not globally locked
+                return { week: w, firstSunday: null, locked: false };
+              }
+              return { week: w, firstSunday: first.toISOString(), locked: now >= first };
             } catch {
-              return { week: w, locked: w < cur }; // fallback to provisional
+              // If fetch fails, fall back to a simple rule: weeks < backend current are locked
+              return { week: w, firstSunday: null, locked: w < backendCurrentWeek };
             }
           })
         );
 
-        // Apply overrides to the two weeks we just checked
-        const refined = list.map((row) => {
-          const ov = overrides.find((o) => o.week === row.week_number);
-          if (!ov) return row;
-          return {
-            ...row,
-            is_locked: ov.locked && row.week_number < cur ? true : ov.locked,
-            // logic note: for previous week, ov.locked accurately reflects whether its first Sunday passed
-            // for current week, ov.locked will be false before Sunday (so stays editable)
-          };
-        });
+        // --- D) Choose the display “current” week:
+        // The first week whose first Sunday is still in the future (locked=false).
+        // If none match (late season), fall back to backend current or last unlocked rule.
+        let displayCurrent =
+          meta.find((m) => m.locked === false)?.week ??
+          backendCurrentWeek ??
+          1;
 
-        setWeeks(refined);
-      } catch (err) {
-        console.error("Error fetching dashboard data:", err);
-        // Safe fallback UI
-        const fallbackWeeks = Array.from({ length: TOTAL_WEEKS }, (_, i) => ({
-          week_number: i + 1,
-          is_locked: false,
-          is_current: i + 1 === 1,
+        // Guard: if backend says 2 but Week 1’s Sunday hasn’t happened (locked=false),
+        // the find() above will return 1 — perfect for your Week 1 case.
+        setCurrentWeekDisplay(displayCurrent);
+
+        // --- E) Build rows with is_current & is_locked per week ---
+        const rows = meta.map((m) => ({
+          week_number: m.week,
+          is_locked: !!m.locked,
+          is_current: m.week === displayCurrent,
         }));
-        setWeeks(fallbackWeeks);
-        setCurrentWeek(1);
+        setWeekRows(rows);
       } finally {
         setLoading(false);
       }
     };
 
-    fetchData();
+    run();
   }, [user?.id, axiosAuth]);
 
   const goToWeek = (weekNumber) => navigate(`/picks/${weekNumber}`);
   const goToOverallLeaderboard = () => navigate("/leaderboard/overall");
   const goToWeeklyLeaderboard = () => {
     const qs = window.location.search || "";
-    navigate(`/leaderboard/week/${currentWeek}${qs}`);
+    navigate(`/leaderboard/week/${currentWeekDisplay}${qs}`);
   };
   const goToAdmin = () => navigate("/admin");
 
@@ -154,18 +144,20 @@ const Dashboard = () => {
       <h2 className="text-2xl font-bold mb-4">
         Welcome, {user?.first_name || "User"}!
       </h2>
+
       <p className="mb-4 text-gray-700">
-        Make or edit your weekly pick. Past weeks lock after the first Sunday
-        kickoff; the Picks page always enforces the actual lock time.
+        Make or edit your weekly pick. Past weeks lock after their first Sunday
+        kickoff; the Picks page enforces the actual lock time.
       </p>
 
       {/* Week Selector */}
       <div className="flex flex-col gap-3 mb-6">
-        {weeks.map((wk) => {
+        {weekRows.map((wk) => {
           const pick = userPicks[wk.week_number];
+          const canClick = !wk.is_locked;
+
           const baseClasses =
             "px-4 py-2 rounded border transition-all duration-200 font-medium flex justify-between items-center relative";
-
           let bgClass = "bg-gray-100 text-black";
           if (wk.is_locked) bgClass = "bg-gray-300 text-gray-500";
           else if (wk.is_current) bgClass = "bg-green-600 text-white";
@@ -174,7 +166,20 @@ const Dashboard = () => {
           if (wk.is_locked) label += " 🔒";
           if (wk.is_current && !wk.is_locked) label += " 🟢";
 
-          const canClick = !wk.is_locked;
+          // Chip logic:
+          // - If unlocked and you have a pick:
+          //     - current week → “Submitted — Edit”
+          //     - non-current → “Submitted”
+          // - If unlocked and no pick → “Make Pick”
+          // - If locked → no chip (button disabled)
+          let chip = null;
+          if (!wk.is_locked) {
+            if (pick) {
+              chip = wk.is_current ? "Submitted — Edit" : "Submitted";
+            } else {
+              chip = "Make Pick";
+            }
+          }
 
           return (
             <div key={wk.week_number} className="relative">
@@ -198,7 +203,7 @@ const Dashboard = () => {
                 }
               >
                 <span>{label}</span>
-                {!wk.is_locked && (
+                {chip && (
                   <span
                     className={[
                       "ml-3 text-xs px-2 py-0.5 rounded",
@@ -209,7 +214,7 @@ const Dashboard = () => {
                         : "bg-gray-200 text-gray-700",
                     ].join(" ")}
                   >
-                    {pick ? (wk.is_current ? "Submitted — Edit" : "Submitted") : "Make Pick"}
+                    {chip}
                   </span>
                 )}
               </button>
@@ -275,6 +280,4 @@ const Dashboard = () => {
       </button>
     </div>
   );
-};
-
-export default Dashboard;
+}
