@@ -42,7 +42,6 @@ export default function WeeklyLeaderboard() {
     qa_mode: false,
     gotw: { actual_total: null },
     potw: { actual_yards: null },
-    // rows: [{display_name, team, gotw_prediction, potw_prediction, gotw_rank, potw_exact, base_points, bonus_points, total_points, is_favorite, is_correct_pick}]
     rows: [],
   });
 
@@ -78,7 +77,7 @@ export default function WeeklyLeaderboard() {
     })();
   }, [weekParam, navigate]);
 
-  // 2) Load weekly scores (new endpoint, with graceful fallback)
+  // 2) Load weekly scores (new endpoint, fallback to legacy)
   useEffect(() => {
     if (week == null) return;
 
@@ -86,7 +85,6 @@ export default function WeeklyLeaderboard() {
       setLoading(true);
       setErr("");
       try {
-        // Try the new scoring endpoint
         const res = await axios.get(
           `${import.meta.env.VITE_BACKEND_URL}/leaderboard/week/${week}${
             window.location.search || ""
@@ -104,7 +102,6 @@ export default function WeeklyLeaderboard() {
           rows: Array.isArray(d.rows) ? d.rows : [],
         });
       } catch (e1) {
-        // Fallback to legacy public feed (no scoring breakdown)
         try {
           const res2 = await axios.get(
             `${import.meta.env.VITE_BACKEND_URL}/picks/week/${week}/public${
@@ -153,9 +150,14 @@ export default function WeeklyLeaderboard() {
 
   const isLocked = !!weekly.locked;
 
+  // Friendly unlock time text (fallback to static message if none provided)
+  const unlockText = weekly.unlock_at_iso
+    ? new Date(weekly.unlock_at_iso).toLocaleString()
+    : "Sunday 11:00 AM (Arizona)";
+
   // 3) Sort rows:
-  // - Locked: alphabetical by display_name (no spoilers)
-  // - Unlocked: winner first, then by total points desc, then by name
+  // - Locked: alphabetical by name (no spoilers)
+  // - Unlocked: winner first, then by total points desc, then name
   const rows = useMemo(() => {
     const arr = [...(weekly.rows || [])];
     if (isLocked) {
@@ -193,67 +195,91 @@ export default function WeeklyLeaderboard() {
         )}
       </div>
 
-      {/* Lock banner */}
       {isLocked && (
         <div className="mb-4 p-3 rounded border border-yellow-300 bg-yellow-50 text-yellow-900">
-          Public picks are hidden until Sunday late morning (Arizona).
-          {weekly.unlock_at_iso && (
-            <>
-              {" "}
-              Unlocks at{" "}
-              <strong>{new Date(weekly.unlock_at_iso).toLocaleString()}</strong>.
-            </>
-          )}
-          {" "}You can still see the list of participants below.
+          Public picks are hidden to prevent spoilers.
+          {" "}
+          <strong>Picks unlock at {unlockText}.</strong>
+          <div className="text-sm text-yellow-800 mt-1">
+            You can see who’s participating below. Team/GOTW/POTW selections and points will appear at unlock.
+          </div>
         </div>
       )}
 
-      {/* Table is always rendered.
-          While locked: only names are shown; all other columns are masked. */}
-      <div className="overflow-x-auto">
-        <table className="min-w-full border rounded">
-          <thead className="bg-gray-100">
-            <tr>
-              <th className="text-left px-3 py-2 border-b">#</th>
-              <th className="text-left px-3 py-2 border-b">Name</th>
-              <th className="text-left px-3 py-2 border-b">Team Pick</th>
-              <th className="text-left px-3 py-2 border-b">GOTW Pick</th>
-              <th className="text-left px-3 py-2 border-b">POTW Pick</th>
-              <th className="text-left px-3 py-2 border-b">Base</th>
-              <th className="text-left px-3 py-2 border-b">Bonus</th>
-              <th className="text-left px-3 py-2 border-b">Total</th>
-            </tr>
-          </thead>
-          <tbody>
-            {rows.map((p, idx) => {
-              const classes =
-                rowClasses(p, isLocked) + (!isLocked && p.is_weekly_winner ? " font-semibold" : "");
-              const showBase = Number.isFinite(Number(p.base_points));
-              const showBonus = Number.isFinite(Number(p.bonus_points));
-              return (
-                <tr key={`${p.display_name}-${idx}`} className={classes}>
-                  <td className="px-3 py-2 border-b align-top">
-                    {idx + 1}
-                    {!isLocked && p.is_weekly_winner && (
-                      <span
-                        className={`ml-2 text-xs px-2 py-0.5 rounded ${badgeClass.winner}`}
-                      >
-                        ⭐ Winner
-                      </span>
-                    )}
+      {/* Locked view: show ONLY names (no dashes/blank cells) */}
+      {isLocked ? (
+        <div className="overflow-x-auto">
+          <table className="min-w-full border rounded">
+            <thead className="bg-gray-100">
+              <tr>
+                <th className="text-left px-3 py-2 border-b">#</th>
+                <th className="text-left px-3 py-2 border-b">Name</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.length === 0 ? (
+                <tr>
+                  <td colSpan={2} className="px-3 py-6 text-center text-gray-500">
+                    No public names to show yet.
                   </td>
+                </tr>
+              ) : (
+                rows.map((p, idx) => (
+                  <tr key={`${p.display_name}-${idx}`} className="bg-white">
+                    <td className="px-3 py-2 border-b align-top">{idx + 1}</td>
+                    <td className="px-3 py-2 border-b align-top">
+                      {p.display_name || "—"}
+                    </td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
+          {weekly.qa_mode && (
+            <div className="mt-3 text-xs text-gray-500">QA Mode is ON</div>
+          )}
+        </div>
+      ) : (
+        // Unlocked view: full details
+        <div className="overflow-x-auto">
+          <table className="min-w-full border rounded">
+            <thead className="bg-gray-100">
+              <tr>
+                <th className="text-left px-3 py-2 border-b">#</th>
+                <th className="text-left px-3 py-2 border-b">Name</th>
+                <th className="text-left px-3 py-2 border-b">Team Pick</th>
+                <th className="text-left px-3 py-2 border-b">GOTW Pick</th>
+                <th className="text-left px-3 py-2 border-b">POTW Pick</th>
+                <th className="text-left px-3 py-2 border-b">Base</th>
+                <th className="text-left px-3 py-2 border-b">Bonus</th>
+                <th className="text-left px-3 py-2 border-b">Total</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((p, idx) => {
+                const classes =
+                  rowClasses(p, false) +
+                  (p.is_weekly_winner ? " font-semibold" : "");
+                const showBase = Number.isFinite(Number(p.base_points));
+                const showBonus = Number.isFinite(Number(p.bonus_points));
+                return (
+                  <tr key={`${p.display_name}-${idx}`} className={classes}>
+                    <td className="px-3 py-2 border-b align-top">
+                      {idx + 1}
+                      {p.is_weekly_winner && (
+                        <span
+                          className={`ml-2 text-xs px-2 py-0.5 rounded ${badgeClass.winner}`}
+                        >
+                          ⭐ Winner
+                        </span>
+                      )}
+                    </td>
 
-                  <td className="px-3 py-2 border-b align-top">
-                    {p.display_name || "—"}
-                  </td>
+                    <td className="px-3 py-2 border-b align-top">
+                      {p.display_name || "—"}
+                    </td>
 
-                  {/* Team Pick */}
-                  <td className="px-3 py-2 border-b align-top">
-                    {isLocked ? (
-                      <span className="text-gray-500 italic">
-                        — hidden until unlock —
-                      </span>
-                    ) : (
+                    <td className="px-3 py-2 border-b align-top">
                       <div className="flex items-center gap-2">
                         <span>{p.team || "—"}</span>
                         {p.is_favorite === true && (
@@ -273,16 +299,9 @@ export default function WeeklyLeaderboard() {
                           <span className="text-xs">❌</span>
                         )}
                       </div>
-                    )}
-                  </td>
+                    </td>
 
-                  {/* GOTW */}
-                  <td className="px-3 py-2 border-b align-top">
-                    {isLocked ? (
-                      <span className="text-gray-500 italic">
-                        — hidden until unlock —
-                      </span>
-                    ) : (
+                    <td className="px-3 py-2 border-b align-top">
                       <div className="flex items-center gap-2">
                         <span>{p.gotw_prediction ?? "—"}</span>
                         {p.gotw_rank === 1 && (
@@ -307,16 +326,9 @@ export default function WeeklyLeaderboard() {
                           </span>
                         )}
                       </div>
-                    )}
-                  </td>
+                    </td>
 
-                  {/* POTW */}
-                  <td className="px-3 py-2 border-b align-top">
-                    {isLocked ? (
-                      <span className="text-gray-500 italic">
-                        — hidden until unlock —
-                      </span>
-                    ) : (
+                    <td className="px-3 py-2 border-b align-top">
                       <div className="flex items-center gap-2">
                         <span>{p.potw_prediction ?? "—"}</span>
                         {p.potw_exact && (
@@ -327,42 +339,38 @@ export default function WeeklyLeaderboard() {
                           </span>
                         )}
                       </div>
-                    )}
-                  </td>
+                    </td>
 
-                  {/* Base / Bonus / Total */}
-                  <td className="px-3 py-2 border-b align-top">
-                    {isLocked ? "—" : (showBase ? Number(p.base_points) : "—")}
-                  </td>
-                  <td className="px-3 py-2 border-b align-top">
-                    {isLocked ? "—" : (showBonus ? Number(p.bonus_points) : "—")}
-                  </td>
-                  <td className="px-3 py-2 border-b align-top">
-                    {isLocked ? (
-                      <span className="text-gray-500 italic">—</span>
-                    ) : (
+                    <td className="px-3 py-2 border-b align-top">
+                      {showBase ? Number(p.base_points) : "—"}
+                    </td>
+                    <td className="px-3 py-2 border-b align-top">
+                      {showBonus ? Number(p.bonus_points) : "—"}
+                    </td>
+
+                    <td className="px-3 py-2 border-b align-top">
                       <span className="inline-block min-w-8 text-center font-bold">
                         {Number(p.total_points ?? 0)}
                       </span>
-                    )}
+                    </td>
+                  </tr>
+                );
+              })}
+              {rows.length === 0 && (
+                <tr>
+                  <td colSpan={8} className="px-3 py-6 text-center text-gray-500">
+                    No public picks to show yet.
                   </td>
                 </tr>
-              );
-            })}
-            {rows.length === 0 && (
-              <tr>
-                <td colSpan={8} className="px-3 py-6 text-center text-gray-500">
-                  No public picks to show yet.
-                </td>
-              </tr>
-            )}
-          </tbody>
-        </table>
+              )}
+            </tbody>
+          </table>
 
-        {weekly.qa_mode && (
-          <div className="mt-3 text-xs text-gray-500">QA Mode is ON</div>
-        )}
-      </div>
+          {weekly.qa_mode && (
+            <div className="mt-3 text-xs text-gray-500">QA Mode is ON</div>
+          )}
+        </div>
+      )}
     </div>
   );
 }
