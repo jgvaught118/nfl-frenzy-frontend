@@ -28,44 +28,47 @@ export default function WeeklyLeaderboard() {
   const { week: weekParam } = useParams();
   const navigate = useNavigate();
 
-  const [week, setWeek] = useState(null); // numeric week once normalized
-  const [data, setData] = useState({
-    locked: false,
-    picks: [],
-    qa_mode: false,
-    unlock_at_iso: null,
-  });
+  const [week, setWeek] = useState(null);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState("");
 
-  // 1) Normalize the route param
+  // unified weekly payload shape
+  const [weekly, setWeekly] = useState({
+    week: null,
+    factor: 1,
+    locked: false,
+    unlock_at_iso: null,
+    qa_mode: false,
+    gotw: { actual_total: null },
+    potw: { actual_yards: null },
+    rows: [], // [{display_name, team, gotw_prediction, potw_prediction, gotw_rank, potw_exact, base_points, bonus_points, total_points, is_favorite, is_correct_pick}]
+  });
+
+  // 1) Normalize week param (redirect to current if invalid)
   useEffect(() => {
-    // If the param is literally "overall", send them to the overall page
     if (weekParam === "overall") {
       navigate("/leaderboard/overall", { replace: true });
       return;
     }
-
     const n = Number(weekParam);
     if (Number.isFinite(n) && n >= 1 && n <= 18) {
       setWeek(n);
       return;
     }
-
-    // If not a valid number, fetch current week from the server and normalize the URL
     (async () => {
       try {
         const res = await axios.get(
           `${import.meta.env.VITE_BACKEND_URL}/admin/current_week`
         );
         const payload = res.data || {};
-        const cw = payload.current_week !== undefined ? payload.current_week : payload;
+        const cw =
+          payload.current_week !== undefined ? payload.current_week : payload;
         const wk = (typeof cw === "object" ? cw.week_number || cw.week : cw) || 1;
         const n2 = Number(wk) || 1;
         setWeek(n2);
         const qs = window.location.search || "";
         navigate(`/leaderboard/week/${n2}${qs}`, { replace: true });
-      } catch (e) {
+      } catch {
         setWeek(1);
         const qs = window.location.search || "";
         navigate(`/leaderboard/week/1${qs}`, { replace: true });
@@ -73,66 +76,128 @@ export default function WeeklyLeaderboard() {
     })();
   }, [weekParam, navigate]);
 
-  // 2) Fetch weekly public picks once we have a numeric week
+  // 2) Load weekly scores (new endpoint, with graceful fallback)
   useEffect(() => {
     if (week == null) return;
 
-    const fetchData = async () => {
+    const load = async () => {
+      setLoading(true);
+      setErr("");
       try {
-        setLoading(true);
-        setErr("");
-        const qs = window.location.search || ""; // e.g., ?debug_unlocked=1 for QA
+        // Try the new scoring endpoint
         const res = await axios.get(
-          `${import.meta.env.VITE_BACKEND_URL}/picks/week/${week}/public${qs}`
+          `${import.meta.env.VITE_BACKEND_URL}/leaderboard/week/${week}${window.location.search || ""}`
         );
-        setData(res.data || { locked: false, picks: [], qa_mode: false });
-      } catch (e) {
-        console.error(e);
-        setErr(e.response?.data?.error || "Failed to load weekly picks");
+        const d = res.data || {};
+        setWeekly({
+          week: Number(d.week ?? week),
+          factor: Number(d.factor ?? 1) || 1,
+          locked: !!d.locked,
+          unlock_at_iso: d.unlock_at_iso || null,
+          qa_mode: !!d.qa_mode,
+          gotw: d.gotw || { actual_total: null },
+          potw: d.potw || { actual_yards: null },
+          rows: Array.isArray(d.rows) ? d.rows : [],
+        });
+      } catch (e1) {
+        // Fallback to the legacy public feed (no scoring breakdown)
+        try {
+          const res2 = await axios.get(
+            `${import.meta.env.VITE_BACKEND_URL}/picks/week/${week}/public${window.location.search || ""}`
+          );
+          const p = res2.data || { picks: [] };
+          // Normalize the legacy picks to a table-like shape
+          const rows = (p.picks || []).map((x) => ({
+            display_name: x.first_name || x.name || `User ${x.user_id ?? ""}`,
+            team: x.team,
+            gotw_prediction: x.gotw_prediction ?? null,
+            potw_prediction: x.potw_prediction ?? null,
+            gotw_rank: x.gotw_rank ?? null,
+            potw_exact: !!x.potw_exact,
+            base_points: null,
+            bonus_points: null,
+            total_points: x.total_points ?? 0,
+            is_favorite: x.is_favorite ?? null,
+            is_correct_pick: x.is_correct_pick ?? null,
+          }));
+          setWeekly({
+            week,
+            factor: 1,
+            locked: !!p.locked,
+            unlock_at_iso: p.unlock_at_iso || null,
+            qa_mode: !!p.qa_mode,
+            gotw: { actual_total: null },
+            potw: { actual_yards: null },
+            rows,
+          });
+        } catch (e2) {
+          console.error(e2);
+          setErr(
+            e2.response?.data?.error ||
+              e1.response?.data?.error ||
+              "Failed to load weekly leaderboard"
+          );
+        }
       } finally {
         setLoading(false);
       }
     };
 
-    fetchData();
+    load();
   }, [week]);
 
-  const sorted = useMemo(() => {
-    const arr = [...(data.picks || [])];
+  // 3) Sort rows by total points desc, then gotw podium, then exact potw, then name
+  const rows = useMemo(() => {
+    const arr = [...(weekly.rows || [])];
     arr.sort((a, b) => {
-      if (a.is_weekly_winner && !b.is_weekly_winner) return -1;
-      if (!a.is_weekly_winner && b.is_weekly_winner) return 1;
-      if ((b.total_points ?? 0) !== (a.total_points ?? 0))
-        return (b.total_points ?? 0) - (a.total_points ?? 0);
-      return (a.first_name || "").localeCompare(b.first_name || "");
+      const tpA = Number(a.total_points ?? 0);
+      const tpB = Number(b.total_points ?? 0);
+      if (tpB !== tpA) return tpB - tpA;
+
+      const rA = Number(a.gotw_rank ?? 99);
+      const rB = Number(b.gotw_rank ?? 99);
+      if (rA !== rB) return rA - rB;
+
+      if (!!b.potw_exact !== !!a.potw_exact) return (b.potw_exact ? 1 : 0) - (a.potw_exact ? 1 : 0);
+
+      const nA = (a.display_name || "").toLowerCase();
+      const nB = (b.display_name || "").toLowerCase();
+      return nA.localeCompare(nB);
     });
     return arr;
-  }, [data.picks]);
+  }, [weekly.rows]);
 
   if (loading) return <div className="p-6">Loading weekly leaderboard…</div>;
   if (err) return <div className="p-6 text-red-600">{err}</div>;
 
   return (
-    <div className="max-w-4xl mx-auto p-6">
-      {/* Tabs: Overall + W1…W18 (active highlights current week) */}
+    <div className="max-w-5xl mx-auto p-6">
       <LeaderboardTabs active={Number(week)} />
 
-      <h2 className="text-2xl font-bold mb-3">Week {week} Leaderboard</h2>
+      <div className="flex items-center justify-between mb-3">
+        <h2 className="text-2xl font-bold">Week {week} Leaderboard</h2>
 
-      {data.locked && (
+        {weekly.factor > 1 && (
+          <span className="inline-flex items-center gap-2 text-sm px-3 py-1 rounded bg-purple-100 text-purple-800 border border-purple-200">
+            🔥 Double Points (×{weekly.factor})
+          </span>
+        )}
+      </div>
+
+      {weekly.locked && (
         <div className="mb-4 p-3 rounded border border-yellow-300 bg-yellow-50 text-yellow-900">
           Public picks are hidden until Sunday 11:00 AM (Arizona).
-          {data.unlock_at_iso && (
+          {weekly.unlock_at_iso && (
             <>
               {" "}
               Unlocks at{" "}
-              <strong>{new Date(data.unlock_at_iso).toLocaleString()}</strong>.
+              <strong>{new Date(weekly.unlock_at_iso).toLocaleString()}</strong>.
             </>
           )}
         </div>
       )}
 
-      {!data.locked && (
+      {!weekly.locked && (
         <div className="overflow-x-auto">
           <table className="min-w-full border rounded">
             <thead className="bg-gray-100">
@@ -142,15 +207,19 @@ export default function WeeklyLeaderboard() {
                 <th className="text-left px-3 py-2 border-b">Team Pick</th>
                 <th className="text-left px-3 py-2 border-b">GOTW Pick</th>
                 <th className="text-left px-3 py-2 border-b">POTW Pick</th>
-                <th className="text-left px-3 py-2 border-b">Points</th>
+                <th className="text-left px-3 py-2 border-b">Base</th>
+                <th className="text-left px-3 py-2 border-b">Bonus</th>
+                <th className="text-left px-3 py-2 border-b">Total</th>
               </tr>
             </thead>
             <tbody>
-              {sorted.map((p, idx) => {
+              {rows.map((p, idx) => {
                 const classes =
                   rowClasses(p) + (p.is_weekly_winner ? " font-semibold" : "");
+                const showBase = Number.isFinite(Number(p.base_points));
+                const showBonus = Number.isFinite(Number(p.bonus_points));
                 return (
-                  <tr key={`${p.first_name}-${idx}`} className={classes}>
+                  <tr key={`${p.display_name}-${idx}`} className={classes}>
                     <td className="px-3 py-2 border-b align-top">
                       {idx + 1}
                       {p.is_weekly_winner && (
@@ -161,12 +230,14 @@ export default function WeeklyLeaderboard() {
                         </span>
                       )}
                     </td>
+
                     <td className="px-3 py-2 border-b align-top">
-                      {p.first_name || "—"}
+                      {p.display_name || "—"}
                     </td>
+
                     <td className="px-3 py-2 border-b align-top">
                       <div className="flex items-center gap-2">
-                        <span>{p.team}</span>
+                        <span>{p.team || "—"}</span>
                         {p.is_favorite === true && (
                           <span className="text-xs rounded bg-yellow-200 px-1">
                             Favorite
@@ -185,6 +256,7 @@ export default function WeeklyLeaderboard() {
                         )}
                       </div>
                     </td>
+
                     <td className="px-3 py-2 border-b align-top">
                       <div className="flex items-center gap-2">
                         <span>{p.gotw_prediction ?? "—"}</span>
@@ -211,6 +283,7 @@ export default function WeeklyLeaderboard() {
                         )}
                       </div>
                     </td>
+
                     <td className="px-3 py-2 border-b align-top">
                       <div className="flex items-center gap-2">
                         <span>{p.potw_prediction ?? "—"}</span>
@@ -223,27 +296,33 @@ export default function WeeklyLeaderboard() {
                         )}
                       </div>
                     </td>
+
+                    <td className="px-3 py-2 border-b align-top">
+                      {showBase ? Number(p.base_points) : "—"}
+                    </td>
+                    <td className="px-3 py-2 border-b align-top">
+                      {showBonus ? Number(p.bonus_points) : "—"}
+                    </td>
+
                     <td className="px-3 py-2 border-b align-top">
                       <span className="inline-block min-w-8 text-center font-bold">
-                        {p.total_points ?? 0}
+                        {Number(p.total_points ?? 0)}
                       </span>
                     </td>
                   </tr>
                 );
               })}
-              {sorted.length === 0 && (
+              {rows.length === 0 && (
                 <tr>
-                  <td
-                    colSpan={6}
-                    className="px-3 py-6 text-center text-gray-500"
-                  >
+                  <td colSpan={8} className="px-3 py-6 text-center text-gray-500">
                     No public picks to show yet.
                   </td>
                 </tr>
               )}
             </tbody>
           </table>
-          {data.qa_mode && (
+
+          {weekly.qa_mode && (
             <div className="mt-3 text-xs text-gray-500">QA Mode is ON</div>
           )}
         </div>
