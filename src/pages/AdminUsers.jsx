@@ -93,6 +93,7 @@ export default function AdminUsers() {
   const [loading, setLoading] = useState(true);
   const [msg, setMsg] = useState("");
   const [err, setErr] = useState("");
+  const [savingId, setSavingId] = useState(null);
 
   const backend = import.meta.env.VITE_BACKEND_URL;
   const axiosAuth = useMemo(
@@ -102,7 +103,7 @@ export default function AdminUsers() {
     []
   );
 
-  // --- Fetch users with graceful fallbacks ---
+  // --- Fetch users (prefers quick-edit endpoint; falls back to existing) ---
   const fetchUsers = async (override = {}) => {
     setLoading(true);
     setMsg("");
@@ -110,44 +111,45 @@ export default function AdminUsers() {
     const effectiveStatus = override.status ?? status;
     const effectiveQuery = override.q ?? q;
 
+    // Preferred: single quick-edit list
     try {
-      // Preferred: single endpoint with server-side filters
-      const res = await axios.get(`${backend}/admin/users`, {
-        params: { status: effectiveStatus, q: effectiveQuery || undefined },
-        ...axiosAuth,
-      });
+      const res = await axios.get(
+        `${backend}/admin/quick-edit/users`,
+        axiosAuth
+      );
+      const list = Array.isArray(res.data) ? res.data : res.data?.users || [];
+      const normalized = list.map(normalizeUser);
+      const filtered = filterByQuery(
+        filterByStatus(normalized, effectiveStatus),
+        effectiveQuery
+      );
+      setRows(filtered);
+      return;
+    } catch {
+      // continue to fallback
+    }
 
-      const payload = res.data;
-      const usersArray = Array.isArray(payload)
-        ? payload
-        : Array.isArray(payload?.users)
-        ? payload.users
-        : [];
+    // Fallback: old endpoints
+    try {
+      const [pRes, aRes] = await Promise.allSettled([
+        axios.get(`${backend}/admin/users/pending`, axiosAuth),
+        axios.get(`${backend}/admin/users`, axiosAuth),
+      ]);
 
-      setRows(usersArray.map(normalizeUser));
-    } catch (e1) {
-      // Fallback: older endpoints
-      try {
-        const [pRes, aRes] = await Promise.allSettled([
-          axios.get(`${backend}/admin/users/pending`, axiosAuth),
-          axios.get(`${backend}/admin/users`, axiosAuth),
-        ]);
+      let merged = [];
+      if (pRes.status === "fulfilled") merged = merged.concat(pRes.value.data || []);
+      if (aRes.status === "fulfilled") merged = merged.concat(aRes.value.data || []);
 
-        let merged = [];
-        if (pRes.status === "fulfilled") merged = merged.concat(pRes.value.data || []);
-        if (aRes.status === "fulfilled") merged = merged.concat(aRes.value.data || []);
-
-        const normalized = merged.map(normalizeUser);
-        const filtered = filterByQuery(
-          filterByStatus(normalized, effectiveStatus),
-          effectiveQuery
-        );
-        setRows(filtered);
-      } catch (e2) {
-        console.error("Load users failed:", e2);
-        setErr(e2.response?.data?.error || "Failed to load users");
-        setRows([]);
-      }
+      const normalized = merged.map(normalizeUser);
+      const filtered = filterByQuery(
+        filterByStatus(normalized, effectiveStatus),
+        effectiveQuery
+      );
+      setRows(filtered);
+    } catch (e2) {
+      console.error("Load users failed:", e2);
+      setErr(e2.response?.data?.error || "Failed to load users");
+      setRows([]);
     } finally {
       setLoading(false);
     }
@@ -184,7 +186,58 @@ export default function AdminUsers() {
     }
   };
 
-  // -------- Actions (try PUT first, then POST fallback) --------
+  // -------- Save inline edits (try quick-edit; fallback to legacy) --------
+  const saveInline = async (row) => {
+    setSavingId(row.id);
+    setMsg("");
+    setErr("");
+
+    const payload = {
+      email: row.email,
+      first_name: row.first_name,
+      last_name: row.last_name,
+      name: row.name,
+      // also allow toggling flags inline if you add checkboxes later
+      approved: !!row.approved,
+      is_active: !!row.is_active,
+    };
+
+    try {
+      await axios.put(
+        `${backend}/admin/quick-edit/users/${row.id}`,
+        payload,
+        axiosAuth
+      );
+      setMsg("✅ Saved");
+    } catch (e1) {
+      // Fallback to a more generic update route if your backend exposes it
+      try {
+        await axios.put(
+          `${backend}/admin/users/${row.id}`,
+          payload,
+          axiosAuth
+        );
+        setMsg("✅ Saved");
+      } catch (e2) {
+        console.error(e2);
+        setErr(
+          e2.response?.data?.error ||
+            "Save failed. (If you haven’t added the quick-edit route, we can wire it up.)"
+        );
+      }
+    } finally {
+      setSavingId(null);
+      // refresh so we see normalized values
+      fetchUsers();
+    }
+  };
+
+  // Local edits
+  const onChangeField = (id, field, value) => {
+    setRows((prev) => prev.map((r) => (r.id === id ? { ...r, [field]: value } : r)));
+  };
+
+  // -------- Actions (keep your existing flows) --------
   const approve = (id) =>
     withBusy(
       async () => {
@@ -281,7 +334,7 @@ export default function AdminUsers() {
   };
 
   return (
-    <div className="max-w-5xl mx-auto p-6 bg-white rounded-lg shadow-sm">
+    <div className="max-w-6xl mx-auto p-6 bg-white rounded-lg shadow-sm">
       <div className="flex items-center justify-between gap-3 mb-4">
         <h2 className="text-2xl font-bold">Admin — Manage Users</h2>
 
@@ -344,8 +397,11 @@ export default function AdminUsers() {
           <table className="min-w-full text-sm">
             <thead className="bg-gray-100 text-left">
               <tr>
-                <th className="px-3 py-2">Name</th>
+                <th className="px-3 py-2">ID</th>
                 <th className="px-3 py-2">Email</th>
+                <th className="px-3 py-2">First</th>
+                <th className="px-3 py-2">Last</th>
+                <th className="px-3 py-2">Display Name</th>
                 <th className="px-3 py-2">Status</th>
                 <th className="px-3 py-2">Admin</th>
                 <th className="px-3 py-2">Created</th>
@@ -355,21 +411,56 @@ export default function AdminUsers() {
             <tbody>
               {!rows.length ? (
                 <tr>
-                  <td colSpan={6} className="px-3 py-6 text-center text-gray-500">
+                  <td colSpan={9} className="px-3 py-6 text-center text-gray-500">
                     No users found.
                   </td>
                 </tr>
               ) : (
                 rows.map((u, i) => {
                   const canDelete = u.id !== user.id; // don’t let you delete yourself
-                  const displayName =
-                    u.name ||
-                    `${u.first_name || ""} ${u.last_name || ""}`.trim() ||
-                    "—";
+
                   return (
                     <tr key={u.id} className={i % 2 ? "bg-gray-50" : ""}>
-                      <td className="px-3 py-2">{displayName}</td>
-                      <td className="px-3 py-2">{u.email}</td>
+                      <td className="px-3 py-2">{u.id}</td>
+
+                      {/* Inline-editable fields */}
+                      <td className="px-3 py-2">
+                        <input
+                          className="border rounded px-2 py-1 w-64"
+                          value={u.email || ""}
+                          onChange={(e) =>
+                            onChangeField(u.id, "email", e.target.value)
+                          }
+                        />
+                      </td>
+                      <td className="px-3 py-2">
+                        <input
+                          className="border rounded px-2 py-1 w-28"
+                          value={u.first_name || ""}
+                          onChange={(e) =>
+                            onChangeField(u.id, "first_name", e.target.value)
+                          }
+                        />
+                      </td>
+                      <td className="px-3 py-2">
+                        <input
+                          className="border rounded px-2 py-1 w-28"
+                          value={u.last_name || ""}
+                          onChange={(e) =>
+                            onChangeField(u.id, "last_name", e.target.value)
+                          }
+                        />
+                      </td>
+                      <td className="px-3 py-2">
+                        <input
+                          className="border rounded px-2 py-1 w-40"
+                          value={u.name || ""}
+                          onChange={(e) =>
+                            onChangeField(u.id, "name", e.target.value)
+                          }
+                        />
+                      </td>
+
                       <td className="px-3 py-2">
                         {statusPill({
                           is_active: u.is_active,
@@ -382,8 +473,10 @@ export default function AdminUsers() {
                           ? new Date(u.created_at).toLocaleString()
                           : "—"}
                       </td>
+
                       <td className="px-3 py-2">
                         <div className="flex flex-wrap gap-2">
+                          {/* Approvals */}
                           {u.pending_approval ? (
                             <>
                               <button
@@ -415,6 +508,7 @@ export default function AdminUsers() {
                             </button>
                           )}
 
+                          {/* Admin toggle */}
                           <button
                             onClick={() => toggleAdmin(u.id, u.is_admin)}
                             className="px-2 py-1 rounded bg-blue-600 text-white hover:bg-blue-700"
@@ -422,6 +516,21 @@ export default function AdminUsers() {
                             {u.is_admin ? "Remove Admin" : "Make Admin"}
                           </button>
 
+                          {/* Save inline edits */}
+                          <button
+                            onClick={() => saveInline(u)}
+                            disabled={savingId === u.id}
+                            className={`px-2 py-1 rounded text-white ${
+                              savingId === u.id
+                                ? "bg-gray-400 cursor-wait"
+                                : "bg-indigo-600 hover:bg-indigo-700"
+                            }`}
+                            title="Save name/email changes"
+                          >
+                            {savingId === u.id ? "Saving…" : "Save"}
+                          </button>
+
+                          {/* Delete */}
                           <button
                             onClick={() => removeUser(u.id, u.email)}
                             disabled={!canDelete}
