@@ -25,27 +25,21 @@ function rowClasses(p, isLocked) {
   return "bg-white";
 }
 
-/** Arizona does not observe DST => UTC-7 all year.
- * Unlock is Sunday 11:00 AM Arizona = 18:00:00 UTC.
- * This returns the *next* Sunday 18:00 UTC from "now".
- */
-function computeNextSundayUnlockISO() {
-  const now = new Date(); // current UTC time internally
-  const d = new Date(now);
-  const day = d.getUTCDay(); // 0=Sun..6=Sat
-  const daysUntilSun = (7 - day) % 7;
-  // candidate Sunday this week or next
-  const candidate = new Date(Date.UTC(
-    d.getUTCFullYear(),
-    d.getUTCMonth(),
-    d.getUTCDate() + daysUntilSun,
-    18, 0, 0, 0 // 18:00 UTC == 11:00 AZ
-  ));
-  if (candidate <= now) {
-    // already past this Sunday's 18:00 UTC — use next Sunday
-    candidate.setUTCDate(candidate.getUTCDate() + 7);
-  }
-  return candidate.toISOString();
+/** Parse a kickoff datetime from various backend shapes */
+function parseKickoff(g) {
+  const raw = g.kickoff ?? g.start_time ?? g.kickoff_time ?? g.game_time;
+  const d = new Date(raw);
+  return isNaN(d.getTime()) ? null : d;
+}
+
+/** Find earliest Sunday kickoff (UTC day 0) for a given array of games */
+function earliestSundayISO(games = []) {
+  const sundays = games
+    .map(parseKickoff)
+    .filter(Boolean)
+    .filter((d) => d.getUTCDay() === 0) // Sunday
+    .sort((a, b) => a - b);
+  return sundays[0]?.toISOString() || null;
 }
 
 export default function WeeklyLeaderboard() {
@@ -56,7 +50,6 @@ export default function WeeklyLeaderboard() {
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState("");
 
-  // Unified weekly payload shape
   const [weekly, setWeekly] = useState({
     week: null,
     factor: 1,
@@ -67,6 +60,9 @@ export default function WeeklyLeaderboard() {
     potw: { actual_yards: null },
     rows: [],
   });
+
+  // We’ll compute a **per-week** unlock time from the schedule when the backend doesn’t provide one
+  const [computedUnlockISO, setComputedUnlockISO] = useState(null);
 
   // 1) Normalize week param (redirect to current if invalid)
   useEffect(() => {
@@ -107,6 +103,8 @@ export default function WeeklyLeaderboard() {
     const load = async () => {
       setLoading(true);
       setErr("");
+      setComputedUnlockISO(null);
+
       try {
         // Preferred: new scoring endpoint
         const res = await axios.get(
@@ -136,14 +134,14 @@ export default function WeeklyLeaderboard() {
           const p = res2.data || { picks: [] };
           const rows = (p.picks || []).map((x) => ({
             display_name: x.first_name || x.name || `User ${x.user_id ?? ""}`,
-            team: x.team,
+            team: x.team ?? null,
             gotw_prediction: x.gotw_prediction ?? null,
             potw_prediction: x.potw_prediction ?? null,
             gotw_rank: x.gotw_rank ?? null,
             potw_exact: !!x.potw_exact,
             base_points: null,
             bonus_points: null,
-            total_points: x.total_points ?? 0,
+            total_points: null, // don’t let 0 trick the locked detector
             is_favorite: x.is_favorite ?? null,
             is_correct_pick: x.is_correct_pick ?? null,
           }));
@@ -173,42 +171,68 @@ export default function WeeklyLeaderboard() {
     load();
   }, [week]);
 
-  // If backend doesn't mark locked but all pick fields are hidden, treat as locked for UI.
+  // 3) If unlock_at_iso is missing, fetch the week’s games and compute earliest Sunday kickoff
+  useEffect(() => {
+    if (week == null) return;
+    if (weekly.unlock_at_iso) {
+      setComputedUnlockISO(null);
+      return;
+    }
+    (async () => {
+      try {
+        const res = await axios.get(
+          `${import.meta.env.VITE_BACKEND_URL}/games/week/${week}`
+        );
+        const unlock = earliestSundayISO(Array.isArray(res.data) ? res.data : []);
+        setComputedUnlockISO(unlock); // can be null if no Sunday games
+      } catch {
+        setComputedUnlockISO(null);
+      }
+    })();
+  }, [week, weekly.unlock_at_iso]);
+
+  // 4) Locked detection — only consider whether **picks** are hidden
+  //    (don’t let total_points or base_points toggle visibility)
   const lockedUI = useMemo(() => {
     if (weekly.locked) return true;
     const rows = weekly.rows || [];
-    if (!rows.length) return true; // nothing public to show yet
-    const anyVisiblePick = rows.some(
+    if (!rows.length) return true;
+    const anyPickVisible = rows.some(
       (r) =>
         r.team != null ||
         r.gotw_prediction != null ||
-        r.potw_prediction != null ||
-        Number.isFinite(Number(r.base_points)) ||
-        Number.isFinite(Number(r.total_points))
+        r.potw_prediction != null
     );
-    return !anyVisiblePick;
+    return !anyPickVisible;
   }, [weekly.locked, weekly.rows]);
 
-  // Unlock time text: backend value if present; otherwise compute next Sunday 11:00 AM (Arizona)
-  const unlockISO = weekly.unlock_at_iso || computeNextSundayUnlockISO();
-  const unlockText = new Date(unlockISO).toLocaleString();
+  // Unlock time text: backend value if present; else computed from schedule;
+  // as a last resort, show “Sunday 11:00 AM Arizona”.
+  const unlockISO = weekly.unlock_at_iso || computedUnlockISO || null;
+  const unlockText = unlockISO
+    ? new Date(unlockISO).toLocaleString()
+    : "Sunday 11:00 AM (Arizona)";
 
   // Sort rows
   const rows = useMemo(() => {
     const arr = [...(weekly.rows || [])];
     if (lockedUI) {
+      // Names only; alphabetical
       arr.sort((a, b) =>
         (a.display_name || "").localeCompare(b.display_name || "")
       );
       return arr;
     }
+    // Full sort when unlocked
     arr.sort((a, b) => {
       const aWin = !!a.is_weekly_winner;
       const bWin = !!b.is_weekly_winner;
       if (aWin !== bWin) return bWin - aWin;
+
       const tpA = Number(a.total_points ?? 0);
       const tpB = Number(b.total_points ?? 0);
       if (tpB !== tpA) return tpB - tpA;
+
       return (a.display_name || "").localeCompare(b.display_name || "");
     });
     return arr;
@@ -234,14 +258,14 @@ export default function WeeklyLeaderboard() {
       {lockedUI && (
         <div className="mb-4 p-3 rounded border border-yellow-300 bg-yellow-50 text-yellow-900">
           Public picks are hidden to prevent spoilers.{" "}
-          <strong>Picks unlock at {unlockText} (Arizona).</strong>
+          <strong>Picks unlock at {unlockText}.</strong>
           <div className="text-sm text-yellow-800 mt-1">
             You can see who’s participating below. Team/GOTW/POTW selections and points will appear at unlock.
           </div>
         </div>
       )}
 
-      {/* Locked view: show ONLY names (no dashes/blank columns) */}
+      {/* Locked view: ONLY names */}
       {lockedUI ? (
         <div className="overflow-x-auto">
           <table className="min-w-full border rounded">
@@ -260,10 +284,10 @@ export default function WeeklyLeaderboard() {
                 </tr>
               ) : (
                 rows.map((p, idx) => (
-                  <tr key={`${p.display_name}-${idx}`} className="bg-white">
+                  <tr key={`${p.display_name || idx}`} className="bg-white">
                     <td className="px-3 py-2 border-b align-top">{idx + 1}</td>
                     <td className="px-3 py-2 border-b align-top">
-                      {p.display_name || "—"}
+                      {p.display_name || `Player ${idx + 1}`}
                     </td>
                   </tr>
                 ))
@@ -298,7 +322,7 @@ export default function WeeklyLeaderboard() {
                 const showBase = Number.isFinite(Number(p.base_points));
                 const showBonus = Number.isFinite(Number(p.bonus_points));
                 return (
-                  <tr key={`${p.display_name}-${idx}`} className={classes}>
+                  <tr key={`${p.display_name || idx}`} className={classes}>
                     <td className="px-3 py-2 border-b align-top">
                       {idx + 1}
                       {p.is_weekly_winner && (
