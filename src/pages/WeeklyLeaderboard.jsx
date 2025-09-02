@@ -42,6 +42,18 @@ function earliestSundayISO(games = []) {
   return sundays[0]?.toISOString() || null;
 }
 
+/** Safer name helper so locked view never shows “Player 1/2…” unless truly unknown */
+function displayNameOf(p, fallbackIndex = 0) {
+  return (
+    p.display_name ||
+    p.first_name ||
+    p.name ||
+    (p.email ? p.email.split("@")[0] : "") ||
+    (p.user_id ? `User ${p.user_id}` : "") ||
+    `Player ${fallbackIndex + 1}`
+  );
+}
+
 export default function WeeklyLeaderboard() {
   const { week: weekParam } = useParams();
   const navigate = useNavigate();
@@ -61,7 +73,6 @@ export default function WeeklyLeaderboard() {
     rows: [],
   });
 
-  // We’ll compute a **per-week** unlock time from the schedule when the backend doesn’t provide one
   const [computedUnlockISO, setComputedUnlockISO] = useState(null);
 
   // 1) Normalize week param (redirect to current if invalid)
@@ -106,7 +117,6 @@ export default function WeeklyLeaderboard() {
       setComputedUnlockISO(null);
 
       try {
-        // Preferred: new scoring endpoint
         const res = await axios.get(
           `${import.meta.env.VITE_BACKEND_URL}/leaderboard/week/${week}${
             window.location.search || ""
@@ -133,7 +143,9 @@ export default function WeeklyLeaderboard() {
           );
           const p = res2.data || { picks: [] };
           const rows = (p.picks || []).map((x) => ({
+            user_id: x.user_id,
             display_name: x.first_name || x.name || `User ${x.user_id ?? ""}`,
+            email: x.email, // may not exist; handy for name fallback
             team: x.team ?? null,
             gotw_prediction: x.gotw_prediction ?? null,
             potw_prediction: x.potw_prediction ?? null,
@@ -171,7 +183,7 @@ export default function WeeklyLeaderboard() {
     load();
   }, [week]);
 
-  // 3) If unlock_at_iso is missing, fetch the week’s games and compute earliest Sunday kickoff
+  // 3) If unlock_at_iso is missing, compute earliest Sunday kickoff for THIS week
   useEffect(() => {
     if (week == null) return;
     if (weekly.unlock_at_iso) {
@@ -184,15 +196,14 @@ export default function WeeklyLeaderboard() {
           `${import.meta.env.VITE_BACKEND_URL}/games/week/${week}`
         );
         const unlock = earliestSundayISO(Array.isArray(res.data) ? res.data : []);
-        setComputedUnlockISO(unlock); // can be null if no Sunday games
+        setComputedUnlockISO(unlock); // null if no Sunday games
       } catch {
         setComputedUnlockISO(null);
       }
     })();
   }, [week, weekly.unlock_at_iso]);
 
-  // 4) Locked detection — only consider whether **picks** are hidden
-  //    (don’t let total_points or base_points toggle visibility)
+  // 4) Locked detection — only consider whether picks are hidden
   const lockedUI = useMemo(() => {
     if (weekly.locked) return true;
     const rows = weekly.rows || [];
@@ -206,8 +217,7 @@ export default function WeeklyLeaderboard() {
     return !anyPickVisible;
   }, [weekly.locked, weekly.rows]);
 
-  // Unlock time text: backend value if present; else computed from schedule;
-  // as a last resort, show “Sunday 11:00 AM Arizona”.
+  // Unlock time string
   const unlockISO = weekly.unlock_at_iso || computedUnlockISO || null;
   const unlockText = unlockISO
     ? new Date(unlockISO).toLocaleString()
@@ -217,13 +227,13 @@ export default function WeeklyLeaderboard() {
   const rows = useMemo(() => {
     const arr = [...(weekly.rows || [])];
     if (lockedUI) {
-      // Names only; alphabetical
+      // Names only; alphabetical by derived display name
       arr.sort((a, b) =>
-        (a.display_name || "").localeCompare(b.display_name || "")
+        displayNameOf(a).localeCompare(displayNameOf(b))
       );
       return arr;
     }
-    // Full sort when unlocked
+    // Full unlocked sort
     arr.sort((a, b) => {
       const aWin = !!a.is_weekly_winner;
       const bWin = !!b.is_weekly_winner;
@@ -233,7 +243,7 @@ export default function WeeklyLeaderboard() {
       const tpB = Number(b.total_points ?? 0);
       if (tpB !== tpA) return tpB - tpA;
 
-      return (a.display_name || "").localeCompare(b.display_name || "");
+      return displayNameOf(a).localeCompare(displayNameOf(b));
     });
     return arr;
   }, [weekly.rows, lockedUI]);
@@ -248,7 +258,8 @@ export default function WeeklyLeaderboard() {
       <div className="flex items-center justify-between mb-3">
         <h2 className="text-2xl font-bold">Week {week} Leaderboard</h2>
 
-        {weekly.factor > 1 && !lockedUI && (
+        {/* Always show double-points badge if factor > 1 (even when locked) */}
+        {weekly.factor > 1 && (
           <span className="inline-flex items-center gap-2 text-sm px-3 py-1 rounded bg-purple-100 text-purple-800 border border-purple-200">
             🔥 Double Points (×{weekly.factor})
           </span>
@@ -265,7 +276,7 @@ export default function WeeklyLeaderboard() {
         </div>
       )}
 
-      {/* Locked view: ONLY names */}
+      {/* Locked view: names only */}
       {lockedUI ? (
         <div className="overflow-x-auto">
           <table className="min-w-full border rounded">
@@ -284,10 +295,10 @@ export default function WeeklyLeaderboard() {
                 </tr>
               ) : (
                 rows.map((p, idx) => (
-                  <tr key={`${p.display_name || idx}`} className="bg-white">
+                  <tr key={`${displayNameOf(p, idx)}-${idx}`} className="bg-white">
                     <td className="px-3 py-2 border-b align-top">{idx + 1}</td>
                     <td className="px-3 py-2 border-b align-top">
-                      {p.display_name || `Player ${idx + 1}`}
+                      {displayNameOf(p, idx)}
                     </td>
                   </tr>
                 ))
@@ -322,7 +333,7 @@ export default function WeeklyLeaderboard() {
                 const showBase = Number.isFinite(Number(p.base_points));
                 const showBonus = Number.isFinite(Number(p.bonus_points));
                 return (
-                  <tr key={`${p.display_name || idx}`} className={classes}>
+                  <tr key={`${displayNameOf(p, idx)}-${idx}`} className={classes}>
                     <td className="px-3 py-2 border-b align-top">
                       {idx + 1}
                       {p.is_weekly_winner && (
@@ -335,7 +346,7 @@ export default function WeeklyLeaderboard() {
                     </td>
 
                     <td className="px-3 py-2 border-b align-top">
-                      {p.display_name || "—"}
+                      {displayNameOf(p, idx)}
                     </td>
 
                     <td className="px-3 py-2 border-b align-top">
