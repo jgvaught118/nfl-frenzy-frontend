@@ -1,230 +1,309 @@
-// nfl-frenzy-frontend/src/pages/Dashboard.jsx
-import React, { useEffect, useState, useMemo } from "react";
+// src/pages/Dashboard.jsx
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import axios from "axios";
 import { useAuth } from "../context/AuthContext";
 
-const TOTAL_WEEKS = 18;
-const TOOLTIP_DURATION = 4000; // 4 seconds
-
-const Dashboard = () => {
+export default function Dashboard() {
   const { user, logout } = useAuth();
   const navigate = useNavigate();
 
-  const [weeks, setWeeks] = useState([]);
+  const [week, setWeek] = useState(null);
+  const [games, setGames] = useState([]);
+  const [pick, setPick] = useState(null); // { team, gotw_prediction, potw_prediction }
   const [loading, setLoading] = useState(true);
-  const [currentWeek, setCurrentWeek] = useState(1);
-  const [userPicks, setUserPicks] = useState({});
-  const [tooltipWeek, setTooltipWeek] = useState(null);
-  const [tooltipVisible, setTooltipVisible] = useState(false);
+
+  // lock state
+  const [globalLocked, setGlobalLocked] = useState(false);
+  const [countdown, setCountdown] = useState("");
+  const countdownRef = useRef(null);
 
   const axiosAuth = useMemo(
-    () => ({
-      headers: { Authorization: `Bearer ${localStorage.getItem("token")}` },
-    }),
+    () => ({ headers: { Authorization: `Bearer ${localStorage.getItem("token")}` } }),
     []
   );
 
+  // ----- helpers -----
+  const kickoffDate = (g) => {
+    const val = g.kickoff ?? g.start_time ?? g.kickoff_time;
+    const d = new Date(val);
+    return isNaN(d.getTime()) ? null : d;
+  };
+
+  const computeFirstSundayKickoff = (gamesList) => {
+    const sundays = gamesList
+      .map(kickoffDate)
+      .filter((d) => d && d.getUTCDay() === 0) // 0 = Sunday (UTC)
+      .sort((a, b) => a - b);
+    return sundays[0] || null;
+  };
+
+  const fmtTimeLeft = (msLeft) => {
+    const sec = Math.max(0, Math.floor(msLeft / 1000));
+    const h = Math.floor(sec / 3600);
+    const m = Math.floor((sec % 3600) / 60);
+    const s = sec % 60;
+    return `${h}h ${m}m ${s}s`;
+  };
+
+  const startCountdown = (target) => {
+    if (countdownRef.current) clearInterval(countdownRef.current);
+    const tick = () => {
+      const now = new Date();
+      const diff = target - now;
+      if (diff <= 0) {
+        setGlobalLocked(true);
+        setCountdown("Picks are now locked!");
+        clearInterval(countdownRef.current);
+        return;
+      }
+      setCountdown(`Time until first Sunday kickoff: ${fmtTimeLeft(diff)}`);
+    };
+    tick();
+    countdownRef.current = setInterval(tick, 1000);
+  };
+
+  // ----- load on mount -----
   useEffect(() => {
-    const fetchData = async () => {
+    if (!user) {
+      navigate("/");
+      return;
+    }
+
+    let alive = true;
+
+    const load = async () => {
+      setLoading(true);
       try {
-        if (!user?.id) return;
-
-        // 1) Current week info
-        const wkRes = await axios.get(
-          `${import.meta.env.VITE_BACKEND_URL}/admin/current_week`
+        // 1) current week number (ignore any lock flag from this API)
+        const cwRes = await axios.get(
+          `${import.meta.env.VITE_BACKEND_URL}/admin/current_week`,
+          axiosAuth
         );
-
-        // Handle multiple possible shapes gracefully
-        const payload = wkRes.data || {};
+        const payload = cwRes.data || {};
         const cw =
           payload.current_week !== undefined ? payload.current_week : payload;
-        const weekNumber =
-          (typeof cw === "object" ? cw.week_number || cw.week : cw) || 1;
+        const wk = (typeof cw === "object" ? cw.week_number || cw.week : cw) || 1;
+        const currentWeek = Number(wk) || 1;
+        if (!alive) return;
+        setWeek(currentWeek);
 
-        const firstSundayLock =
-          payload.first_sunday_game_locked ??
-          payload.is_locked ??
-          false;
+        // 2) games for that week (to compute true lock)
+        const gamesRes = await axios.get(
+          `${import.meta.env.VITE_BACKEND_URL}/games/week/${currentWeek}`,
+          axiosAuth
+        );
+        const gamesData = Array.isArray(gamesRes.data) ? gamesRes.data : [];
+        if (!alive) return;
+        setGames(gamesData);
 
-        setCurrentWeek(Number(weekNumber));
-
-        // 2) Build display list for all weeks
-        const generatedWeeks = Array.from({ length: TOTAL_WEEKS }, (_, i) => {
-          const weekNum = i + 1;
-          let is_locked = false;
-          let is_current = false;
-
-          if (weekNum < weekNumber) is_locked = true;
-          else if (weekNum === weekNumber) {
-            is_current = true;
-            is_locked = !!firstSundayLock;
-          }
-
-          return { week_number: weekNum, is_locked, is_current };
-        });
-        setWeeks(generatedWeeks);
-
-        // 3) Your season picks (private) — replaces old /picks/week/all
-        const picksRes = await axios.get(
-          `${import.meta.env.VITE_BACKEND_URL}/picks/season/private`,
+        // 3) your private pick for that week
+        const pickRes = await axios.get(
+          `${import.meta.env.VITE_BACKEND_URL}/picks/week/${currentWeek}/private`,
           { params: { user_id: user.id }, ...axiosAuth }
         );
+        const existing = (pickRes.data || [])[0] || null;
+        if (!alive) return;
+        setPick(
+          existing
+            ? {
+                team: existing.team || "",
+                gotw_prediction:
+                  existing.gotw_prediction == null
+                    ? ""
+                    : String(existing.gotw_prediction),
+                potw_prediction:
+                  existing.potw_prediction == null
+                    ? ""
+                    : String(existing.potw_prediction),
+              }
+            : null
+        );
 
-        const byWeek = {};
-        (picksRes.data || []).forEach((p) => {
-          if (p && typeof p.week !== "undefined") {
-            byWeek[p.week] = p;
+        // 4) compute true global lock from first Sunday kickoff
+        const firstSunday = computeFirstSundayKickoff(gamesData);
+        const now = new Date();
+        if (firstSunday) {
+          if (now >= firstSunday) {
+            setGlobalLocked(true);
+            setCountdown("Picks are now locked!");
+          } else {
+            setGlobalLocked(false);
+            startCountdown(firstSunday);
           }
-        });
-        setUserPicks(byWeek);
-      } catch (err) {
-        console.error("Error fetching dashboard data:", err);
-        // Safe fallback UI so the page still renders
-        const fallbackWeeks = Array.from({ length: TOTAL_WEEKS }, (_, i) => ({
-          week_number: i + 1,
-          is_locked: false,
-          is_current: i + 1 === 1,
-        }));
-        setWeeks(fallbackWeeks);
-        setCurrentWeek(1);
+        } else {
+          // If no Sunday games, rely on per-game locks only (not handled on dashboard)
+          setGlobalLocked(false);
+          setCountdown("");
+        }
+      } catch (e) {
+        console.error("Dashboard load failed:", e);
       } finally {
-        setLoading(false);
+        if (alive) setLoading(false);
       }
     };
 
-    fetchData();
-  }, [user?.id, axiosAuth]);
+    load();
 
-  const goToWeek = (weekNumber) => {
-    navigate(`/picks/${weekNumber}`);
-  };
+    return () => {
+      alive = false;
+      if (countdownRef.current) clearInterval(countdownRef.current);
+    };
+  }, [user, navigate, axiosAuth]);
 
-  const goToOverallLeaderboard = () => {
-    navigate("/leaderboard/overall");
-  };
+  if (loading) {
+    return (
+      <div className="max-w-4xl mx-auto p-6">
+        <p>Loading your dashboard…</p>
+      </div>
+    );
+  }
 
-  const goToWeeklyLeaderboard = () => {
-    // preserve any query params (e.g., ?debug_unlocked=1 during QA)
-    const qs = window.location.search || "";
-    navigate(`/leaderboard/week/${currentWeek}${qs}`);
-  };
-
-  const goToAdmin = () => {
-    navigate("/admin");
-  };
-
-  const showTooltip = (weekNumber) => {
-    setTooltipWeek(weekNumber);
-    setTooltipVisible(true);
-
-    setTimeout(() => {
-      setTooltipVisible(false);
-      setTimeout(() => setTooltipWeek(null), 300);
-    }, TOOLTIP_DURATION);
-  };
-
-  if (loading) return <p>Loading dashboard...</p>;
+  const isDouble = week === 13 || week === 17;
 
   return (
-    <div className="max-w-xl mx-auto p-6">
-      <h2 className="text-2xl font-bold mb-4">
-        Welcome, {user?.first_name || "User"}!
-      </h2>
-      <p className="mb-6 text-gray-700">
-        This is your dashboard. View your picks and the leaderboard below.
-      </p>
-
-      {/* Week Selector */}
-      <div className="flex flex-col gap-3 mb-6">
-        {weeks.map((week) => {
-          const pick = userPicks[week.week_number];
-          const baseClasses =
-            "px-4 py-2 rounded border transition-all duration-200 font-medium flex justify-between items-center relative";
-          let bgClass = "bg-gray-100 text-black cursor-pointer";
-
-          if (week.is_locked) bgClass = "bg-gray-300 text-gray-500 cursor-not-allowed";
-          else if (week.is_current) bgClass = "bg-green-600 text-white";
-
-          let label = `Week ${week.week_number}`;
-          if (week.is_locked) label += " 🔒";
-          if (week.is_current && !week.is_locked) label += " 🟢";
-
-          return (
-            <div key={week.week_number} className="relative">
-              <button
-                onClick={() => {
-                  if (!week.is_locked) goToWeek(week.week_number);
-                  if (pick) showTooltip(week.week_number);
-                }}
-                className={`${baseClasses} ${bgClass}`}
-                disabled={week.is_locked}
-              >
-                <span>{label}</span>
-              </button>
-
-              {/* Tooltip */}
-              {pick && tooltipWeek === week.week_number && (
-                <div
-                  className={`absolute left-full ml-2 top-0 w-64 p-3 bg-gray-800 text-white text-sm rounded shadow-lg z-50 transition-opacity duration-300 ${
-                    tooltipVisible ? "opacity-100" : "opacity-0"
-                  }`}
-                >
-                  <div className="font-bold mb-1">Your Picks:</div>
-                  <ul className="list-disc list-inside">
-                    {Object.entries(pick).map(([key, value]) => {
-                      if (["id", "user_id", "week"].includes(key)) return null;
-                      return (
-                        <li key={key}>
-                          <strong>{key.replace(/_/g, " ")}:</strong> {String(value)}
-                        </li>
-                      );
-                    })}
-                  </ul>
-                </div>
-              )}
-            </div>
-          );
-        })}
+    <div className="max-w-4xl mx-auto p-6 space-y-6">
+      <div className="flex items-center justify-between">
+        <h1 className="text-2xl font-bold">Dashboard</h1>
+        <div className="text-sm text-gray-600">Week <b>{week}</b></div>
       </div>
 
-      {/* Action Buttons */}
-      <div className="flex flex-wrap gap-3 mb-6">
-        <button
-          onClick={goToOverallLeaderboard}
-          className="px-5 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 transition"
-        >
-          Overall Leaderboard
-        </button>
+      {/* Double points banner */}
+      {isDouble && (
+        <div className="rounded-md border border-purple-200 bg-purple-50 text-purple-900 px-3 py-2">
+          🔥 This is a <b>Double Points</b> week (×2).
+        </div>
+      )}
 
-        <button
-          onClick={goToWeeklyLeaderboard}
-          className="px-5 py-2 bg-orange-500 text-white rounded hover:bg-orange-600 transition"
-        >
-          Weekly Leaderboard
-        </button>
+      {/* Countdown */}
+      {!!countdown && (
+        <div className="rounded-md border border-yellow-200 bg-yellow-50 text-yellow-900 px-3 py-2">
+          {countdown}
+        </div>
+      )}
 
-        {/* Admin button (only visible to admins) */}
-        {user?.is_admin && (
-          <button
-            onClick={goToAdmin}
-            className="px-5 py-2 bg-purple-600 text-white rounded hover:bg-purple-700 transition"
-            title="Admin tools: set GOTW/POTW"
-          >
-            Admin
-          </button>
+      {/* Your pick card */}
+      <div className="rounded-lg border bg-white p-5 shadow-sm">
+        <div className="flex items-center justify-between mb-3">
+          <h2 className="text-lg font-semibold">Your Week {week} Pick</h2>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => navigate(`/leaderboard/week/${week}${window.location.search || ""}`)}
+              className="px-3 py-1.5 rounded-md text-sm bg-emerald-600 text-white hover:bg-emerald-700"
+            >
+              Weekly Leaderboard
+            </button>
+            <button
+              onClick={() => navigate(`/leaderboard/overall`)}
+              className="px-3 py-1.5 rounded-md text-sm bg-gray-800 text-white hover:bg-black"
+            >
+              Overall Leaderboard
+            </button>
+          </div>
+        </div>
+
+        {!pick ? (
+          <div className="flex items-center justify-between">
+            <p className="text-gray-700">
+              You haven’t submitted a pick for Week {week} yet.
+            </p>
+            <button
+              onClick={() => navigate(`/picks/${week}`)}
+              className="px-4 py-2 rounded-md bg-blue-600 text-white hover:bg-blue-700"
+              disabled={globalLocked}
+              title={globalLocked ? "Picks are locked" : "Make your pick"}
+            >
+              Make Your Pick
+            </button>
+          </div>
+        ) : (
+          <>
+            <div className="grid sm:grid-cols-3 gap-3">
+              <div className="rounded border p-3">
+                <div className="text-sm text-gray-500 mb-1">Team</div>
+                <div className="text-lg font-semibold">{pick.team || "—"}</div>
+              </div>
+              <div className="rounded border p-3">
+                <div className="text-sm text-gray-500 mb-1">GOTW Total Points</div>
+                <div className="text-lg font-semibold">
+                  {pick.gotw_prediction !== "" ? pick.gotw_prediction : "—"}
+                </div>
+              </div>
+              <div className="rounded border p-3">
+                <div className="text-sm text-gray-500 mb-1">POTW Yards</div>
+                <div className="text-lg font-semibold">
+                  {pick.potw_prediction !== "" ? pick.potw_prediction : "—"}
+                </div>
+              </div>
+            </div>
+
+            <div className="mt-4 flex items-center justify-between">
+              <div className="text-sm text-gray-600">
+                {globalLocked ? (
+                  <span className="text-red-600 font-medium">Locked</span>
+                ) : (
+                  <span className="text-emerald-700 font-medium">
+                    Submitted — you can still edit
+                  </span>
+                )}
+              </div>
+              <button
+                onClick={() => navigate(`/picks/${week}`)}
+                className={`px-4 py-2 rounded-md text-white ${
+                  globalLocked
+                    ? "bg-gray-400 cursor-not-allowed"
+                    : "bg-blue-600 hover:bg-blue-700"
+                }`}
+                disabled={globalLocked}
+                title={globalLocked ? "Picks are locked" : "Edit your pick"}
+              >
+                {globalLocked ? "Locked" : "Edit Pick"}
+              </button>
+            </div>
+          </>
         )}
       </div>
 
+      {/* Quick links */}
+      <div className="rounded-lg border bg-white p-5 shadow-sm">
+        <h3 className="text-lg font-semibold mb-2">Quick Links</h3>
+        <div className="flex flex-wrap gap-2">
+          <button
+            onClick={() => navigate(`/picks/${week}`)}
+            className="px-3 py-2 rounded-md bg-blue-600 text-white hover:bg-blue-700"
+          >
+            Go to Weekly Picks
+          </button>
+          <button
+            onClick={() => navigate(`/leaderboard/week/${week}${window.location.search || ""}`)}
+            className="px-3 py-2 rounded-md bg-emerald-600 text-white hover:bg-emerald-700"
+          >
+            Week {week} Leaderboard
+          </button>
+          <button
+            onClick={() => navigate(`/leaderboard/overall`)}
+            className="px-3 py-2 rounded-md bg-gray-800 text-white hover:bg-black"
+          >
+            Overall Leaderboard
+          </button>
+          <button
+            onClick={() => navigate(`/how-to-play`)}
+            className="px-3 py-2 rounded-md bg-gray-200 text-gray-800 hover:bg-gray-300"
+          >
+            How to Play
+          </button>
+        </div>
+      </div>
+
       {/* Logout */}
-      <button
-        onClick={logout}
-        className="px-6 py-2 bg-red-600 text-white rounded hover:bg-red-700 transition"
-      >
-        Log Out
-      </button>
+      <div className="pt-2">
+        <button
+          onClick={logout}
+          className="px-6 py-2 bg-red-600 text-white rounded hover:bg-red-700 transition"
+        >
+          Log Out
+        </button>
+      </div>
     </div>
   );
-};
-
-export default Dashboard;
+}
