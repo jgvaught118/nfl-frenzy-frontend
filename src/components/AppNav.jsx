@@ -4,43 +4,25 @@ import { NavLink, useLocation, useNavigate } from "react-router-dom";
 import axios from "axios";
 import { useAuth } from "../context/AuthContext";
 
-// ── Singleton guard (hard stop for any duplicate mounting) ───────────────
-let NAV_RENDERED = false;
-
 function pill(isActive) {
   return [
     "inline-flex items-center rounded-full px-3 py-2 text-sm font-medium tab-link",
     "no-underline visited:no-underline visited:text-gray-800",
     isActive
-      ? "bg-blue-600 text-white shadow-sm"
+      ? "bg-blue-600 text-white shadow-sm ring-1 ring-blue-600"
       : "bg-white text-gray-800 ring-1 ring-gray-200 hover:bg-gray-50",
     "transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500",
   ].join(" ");
 }
 
 export default function AppNav() {
-  // if another instance tries to mount, bail
-  if (NAV_RENDERED) return null;
-  NAV_RENDERED = true;
-
   const { user, logout } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
 
-  useEffect(() => {
-    // if this nav ever unmounts, allow mount again
-    return () => {
-      NAV_RENDERED = false;
-    };
-  }, []);
-
   if (!user || location.pathname === "/") return null;
 
   const [currentWeek, setCurrentWeek] = useState(1);
-  const [open, setOpen] = useState(false);
-
-  // close mobile menu on route change
-  useEffect(() => setOpen(false), [location.pathname]);
 
   const axiosAuth = useMemo(
     () => ({ headers: { Authorization: `Bearer ${localStorage.getItem("token")}` } }),
@@ -95,7 +77,7 @@ export default function AppNav() {
             <span>NFL Frenzy</span>
           </button>
 
-          <div className="hidden items-center gap-3 md:flex">
+          <div className="flex items-center gap-3">
             <span className="text-sm text-gray-600">
               Hi, <b>{user?.first_name || user?.name || "Player"}</b>
             </span>
@@ -106,29 +88,11 @@ export default function AppNav() {
               Log Out
             </button>
           </div>
-
-          <button
-            type="button"
-            className="inline-flex items-center justify-center rounded-md p-2 text-gray-700 hover:bg-gray-100 md:hidden"
-            onClick={() => setOpen(v => !v)}
-            aria-label="Toggle menu"
-          >
-            {open ? (
-              <svg className="h-6 w-6" viewBox="0 0 24 24" fill="none">
-                <path d="M6 6l12 12M6 18L18 6" stroke="currentColor" strokeWidth="2" />
-              </svg>
-            ) : (
-              <svg className="h-6 w-6" viewBox="0 0 24 24" fill="none">
-                <path d="M4 7h16M4 12h16M4 17h16" stroke="currentColor" strokeWidth="2" />
-              </svg>
-            )}
-          </button>
         </div>
 
-        {/* Tabs */}
+        {/* Single responsive pill strip (scrolls on small screens, wraps on larger) */}
         <nav className="pb-3">
-          {/* Desktop pills */}
-          <div className="hidden md:flex flex-wrap items-center gap-2 sm:gap-3">
+          <div className="tab-strip flex items-center gap-2 sm:gap-3 overflow-x-auto no-scrollbar flex-wrap">
             {baseLinks.map(l => (
               <NavLink key={l.to} to={l.to} className={({ isActive }) => pill(isActive)}>
                 {l.label}
@@ -142,50 +106,6 @@ export default function AppNav() {
                 {l.label}
               </NavLink>
             ))}
-          </div>
-
-          {/* Mobile list (hidden on md+) */}
-          <div className={`md:hidden overflow-hidden transition-[max-height] duration-300 ${open ? "max-h-96" : "max-h-0"}`}>
-            <div className="grid gap-1 pt-2 pb-3">
-              {baseLinks.map(l => (
-                <NavLink
-                  key={l.to}
-                  to={l.to}
-                  className={({ isActive }) =>
-                    `rounded-lg px-3 py-2 no-underline visited:no-underline ${
-                      isActive ? "bg-blue-50 text-blue-700" : "hover:bg-gray-50"
-                    }`
-                  }
-                  onClick={() => setOpen(false)}
-                >
-                  {l.label}
-                </NavLink>
-              ))}
-
-              {adminLinks.length > 0 && <div className="mx-3 my-1 h-px bg-gray-200" />}
-
-              {adminLinks.map(l => (
-                <NavLink
-                  key={l.to}
-                  to={l.to}
-                  className={({ isActive }) =>
-                    `rounded-lg px-3 py-2 no-underline visited:no-underline ${
-                      isActive ? "bg-blue-50 text-blue-700" : "hover:bg-gray-50"
-                    }`
-                  }
-                  onClick={() => setOpen(false)}
-                >
-                  {l.label}
-                </NavLink>
-              ))}
-
-              <button
-                onClick={() => { setOpen(false); logout(); }}
-                className="mt-1 mx-3 rounded-lg bg-red-600 px-3 py-2 text-left text-sm text-white hover:bg-red-700"
-              >
-                Log Out
-              </button>
-            </div>
           </div>
         </nav>
       </div>
