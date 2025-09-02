@@ -32,6 +32,13 @@ a:focus {
   text-decoration: none !important;
 }
 
+/* src/index.css */
+a,
+a:visited {
+  text-decoration: none;
+  color: inherit;
+}
+
 /* Nice focus ring for keyboard users */
 :focus-visible {
   outline: 2px solid var(--focus);
