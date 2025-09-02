@@ -30,42 +30,37 @@ const Dashboard = () => {
       try {
         if (!user?.id) return;
 
-        // 1) Current week info
+        // 1) Current week number (we intentionally ignore any "locked" flag here,
+        //    because we want the Dashboard to remain editable until the *actual*
+        //    global lock time; the Picks page enforces that for real).
         const wkRes = await axios.get(
           `${import.meta.env.VITE_BACKEND_URL}/admin/current_week`
         );
 
-        // Handle multiple possible shapes gracefully
         const payload = wkRes.data || {};
         const cw =
           payload.current_week !== undefined ? payload.current_week : payload;
         const weekNumber =
           (typeof cw === "object" ? cw.week_number || cw.week : cw) || 1;
 
-        const firstSundayLock =
-          payload.first_sunday_game_locked ??
-          payload.is_locked ??
-          false;
-
         setCurrentWeek(Number(weekNumber));
 
         // 2) Build display list for all weeks
+        //    Past weeks are locked; current/future weeks are unlocked from Dashboard perspective.
         const generatedWeeks = Array.from({ length: TOTAL_WEEKS }, (_, i) => {
           const weekNum = i + 1;
-          let is_locked = false;
-          let is_current = false;
+          const isPast = weekNum < weekNumber;
+          const isCurrent = weekNum === weekNumber;
 
-          if (weekNum < weekNumber) is_locked = true;
-          else if (weekNum === weekNumber) {
-            is_current = true;
-            is_locked = !!firstSundayLock;
-          }
-
-          return { week_number: weekNum, is_locked, is_current };
+          return {
+            week_number: weekNum,
+            is_locked: isPast,   // ✅ only past weeks locked here
+            is_current: isCurrent,
+          };
         });
         setWeeks(generatedWeeks);
 
-        // 3) Your season picks (private) — replaces old /picks/week/all
+        // 3) Your season picks (private)
         const picksRes = await axios.get(
           `${import.meta.env.VITE_BACKEND_URL}/picks/season/private`,
           { params: { user_id: user.id }, ...axiosAuth }
@@ -105,7 +100,6 @@ const Dashboard = () => {
   };
 
   const goToWeeklyLeaderboard = () => {
-    // preserve any query params (e.g., ?debug_unlocked=1 during QA)
     const qs = window.location.search || "";
     navigate(`/leaderboard/week/${currentWeek}${qs}`);
   };
@@ -131,40 +125,68 @@ const Dashboard = () => {
       <h2 className="text-2xl font-bold mb-4">
         Welcome, {user?.first_name || "User"}!
       </h2>
-      <p className="mb-6 text-gray-700">
-        This is your dashboard. View your picks and the leaderboard below.
+      <p className="mb-4 text-gray-700">
+        Make or edit your weekly pick. Past weeks are locked; current week remains editable here until the official lock. The Picks page always enforces the actual lock time.
       </p>
 
       {/* Week Selector */}
       <div className="flex flex-col gap-3 mb-6">
-        {weeks.map((week) => {
-          const pick = userPicks[week.week_number];
+        {weeks.map((wk) => {
+          const pick = userPicks[wk.week_number];
           const baseClasses =
             "px-4 py-2 rounded border transition-all duration-200 font-medium flex justify-between items-center relative";
-          let bgClass = "bg-gray-100 text-black cursor-pointer";
 
-          if (week.is_locked) bgClass = "bg-gray-300 text-gray-500 cursor-not-allowed";
-          else if (week.is_current) bgClass = "bg-green-600 text-white";
+          // Styling
+          let bgClass = "bg-gray-100 text-black";
+          if (wk.is_locked) bgClass = "bg-gray-300 text-gray-500";
+          else if (wk.is_current) bgClass = "bg-green-600 text-white";
 
-          let label = `Week ${week.week_number}`;
-          if (week.is_locked) label += " 🔒";
-          if (week.is_current && !week.is_locked) label += " 🟢";
+          // Label
+          let label = `Week ${wk.week_number}`;
+          if (wk.is_locked) label += " 🔒";
+          if (wk.is_current && !wk.is_locked) label += " 🟢";
 
           return (
-            <div key={week.week_number} className="relative">
+            <div key={wk.week_number} className="relative">
               <button
                 onClick={() => {
-                  if (!week.is_locked) goToWeek(week.week_number);
-                  if (pick) showTooltip(week.week_number);
+                  // Past weeks aren't clickable; current/future are always clickable from Dashboard.
+                  if (!wk.is_locked) {
+                    goToWeek(wk.week_number);
+                    if (pick) showTooltip(wk.week_number);
+                  }
                 }}
-                className={`${baseClasses} ${bgClass}`}
-                disabled={week.is_locked}
+                className={`${baseClasses} ${bgClass} ${wk.is_locked ? "cursor-not-allowed" : "cursor-pointer"}`}
+                disabled={wk.is_locked}
+                title={
+                  wk.is_locked
+                    ? "Past week — locked"
+                    : pick
+                    ? "Edit your pick"
+                    : "Make your pick"
+                }
               >
                 <span>{label}</span>
+
+                {/* Right side chip: Submitted / Edit */}
+                {!wk.is_locked && (
+                  <span
+                    className={[
+                      "ml-3 text-xs px-2 py-0.5 rounded",
+                      pick
+                        ? (wk.is_current
+                            ? "bg-emerald-100 text-emerald-800"
+                            : "bg-blue-100 text-blue-800")
+                        : "bg-gray-200 text-gray-700",
+                    ].join(" ")}
+                  >
+                    {pick ? (wk.is_current ? "Submitted — Edit" : "Submitted") : "Make Pick"}
+                  </span>
+                )}
               </button>
 
-              {/* Tooltip */}
-              {pick && tooltipWeek === week.week_number && (
+              {/* Tooltip w/ your pick snapshot */}
+              {pick && tooltipWeek === wk.week_number && (
                 <div
                   className={`absolute left-full ml-2 top-0 w-64 p-3 bg-gray-800 text-white text-sm rounded shadow-lg z-50 transition-opacity duration-300 ${
                     tooltipVisible ? "opacity-100" : "opacity-0"
@@ -204,7 +226,6 @@ const Dashboard = () => {
           Weekly Leaderboard
         </button>
 
-        {/* Admin button (only visible to admins) */}
         {user?.is_admin && (
           <button
             onClick={goToAdmin}
