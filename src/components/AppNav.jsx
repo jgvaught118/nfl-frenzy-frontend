@@ -24,6 +24,23 @@ export default function AppNav() {
   // Hide nav on login route
   if (!user || location.pathname === "/") return null;
 
+  // ---------- singleton guard (prevents duplicate navs) ----------
+  const [allowed, setAllowed] = useState(true);
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    if (window.__APPNAV_MOUNTED) {
+      setAllowed(false);
+      return;
+    }
+    window.__APPNAV_MOUNTED = true;
+    return () => {
+      // clear flag on unmount so it can mount once again if needed
+      window.__APPNAV_MOUNTED = false;
+    };
+  }, []);
+  if (!allowed) return null;
+  // ---------------------------------------------------------------
+
   const [currentWeek, setCurrentWeek] = useState(1);
   const [open, setOpen] = useState(false);
 
