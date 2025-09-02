@@ -25,6 +25,29 @@ function rowClasses(p, isLocked) {
   return "bg-white";
 }
 
+/** Arizona does not observe DST => UTC-7 all year.
+ * Unlock is Sunday 11:00 AM Arizona = 18:00:00 UTC.
+ * This returns the *next* Sunday 18:00 UTC from "now".
+ */
+function computeNextSundayUnlockISO() {
+  const now = new Date(); // current UTC time internally
+  const d = new Date(now);
+  const day = d.getUTCDay(); // 0=Sun..6=Sat
+  const daysUntilSun = (7 - day) % 7;
+  // candidate Sunday this week or next
+  const candidate = new Date(Date.UTC(
+    d.getUTCFullYear(),
+    d.getUTCMonth(),
+    d.getUTCDate() + daysUntilSun,
+    18, 0, 0, 0 // 18:00 UTC == 11:00 AZ
+  ));
+  if (candidate <= now) {
+    // already past this Sunday's 18:00 UTC — use next Sunday
+    candidate.setUTCDate(candidate.getUTCDate() + 7);
+  }
+  return candidate.toISOString();
+}
+
 export default function WeeklyLeaderboard() {
   const { week: weekParam } = useParams();
   const navigate = useNavigate();
@@ -85,6 +108,7 @@ export default function WeeklyLeaderboard() {
       setLoading(true);
       setErr("");
       try {
+        // Preferred: new scoring endpoint
         const res = await axios.get(
           `${import.meta.env.VITE_BACKEND_URL}/leaderboard/week/${week}${
             window.location.search || ""
@@ -102,6 +126,7 @@ export default function WeeklyLeaderboard() {
           rows: Array.isArray(d.rows) ? d.rows : [],
         });
       } catch (e1) {
+        // Fallback: legacy public feed
         try {
           const res2 = await axios.get(
             `${import.meta.env.VITE_BACKEND_URL}/picks/week/${week}/public${
@@ -148,19 +173,30 @@ export default function WeeklyLeaderboard() {
     load();
   }, [week]);
 
-  const isLocked = !!weekly.locked;
+  // If backend doesn't mark locked but all pick fields are hidden, treat as locked for UI.
+  const lockedUI = useMemo(() => {
+    if (weekly.locked) return true;
+    const rows = weekly.rows || [];
+    if (!rows.length) return true; // nothing public to show yet
+    const anyVisiblePick = rows.some(
+      (r) =>
+        r.team != null ||
+        r.gotw_prediction != null ||
+        r.potw_prediction != null ||
+        Number.isFinite(Number(r.base_points)) ||
+        Number.isFinite(Number(r.total_points))
+    );
+    return !anyVisiblePick;
+  }, [weekly.locked, weekly.rows]);
 
-  // Friendly unlock time text (fallback to static message if none provided)
-  const unlockText = weekly.unlock_at_iso
-    ? new Date(weekly.unlock_at_iso).toLocaleString()
-    : "Sunday 11:00 AM (Arizona)";
+  // Unlock time text: backend value if present; otherwise compute next Sunday 11:00 AM (Arizona)
+  const unlockISO = weekly.unlock_at_iso || computeNextSundayUnlockISO();
+  const unlockText = new Date(unlockISO).toLocaleString();
 
-  // 3) Sort rows:
-  // - Locked: alphabetical by name (no spoilers)
-  // - Unlocked: winner first, then by total points desc, then name
+  // Sort rows
   const rows = useMemo(() => {
     const arr = [...(weekly.rows || [])];
-    if (isLocked) {
+    if (lockedUI) {
       arr.sort((a, b) =>
         (a.display_name || "").localeCompare(b.display_name || "")
       );
@@ -176,7 +212,7 @@ export default function WeeklyLeaderboard() {
       return (a.display_name || "").localeCompare(b.display_name || "");
     });
     return arr;
-  }, [weekly.rows, isLocked]);
+  }, [weekly.rows, lockedUI]);
 
   if (loading) return <div className="p-6">Loading weekly leaderboard…</div>;
   if (err) return <div className="p-6 text-red-600">{err}</div>;
@@ -188,26 +224,25 @@ export default function WeeklyLeaderboard() {
       <div className="flex items-center justify-between mb-3">
         <h2 className="text-2xl font-bold">Week {week} Leaderboard</h2>
 
-        {weekly.factor > 1 && !isLocked && (
+        {weekly.factor > 1 && !lockedUI && (
           <span className="inline-flex items-center gap-2 text-sm px-3 py-1 rounded bg-purple-100 text-purple-800 border border-purple-200">
             🔥 Double Points (×{weekly.factor})
           </span>
         )}
       </div>
 
-      {isLocked && (
+      {lockedUI && (
         <div className="mb-4 p-3 rounded border border-yellow-300 bg-yellow-50 text-yellow-900">
-          Public picks are hidden to prevent spoilers.
-          {" "}
-          <strong>Picks unlock at {unlockText}.</strong>
+          Public picks are hidden to prevent spoilers.{" "}
+          <strong>Picks unlock at {unlockText} (Arizona).</strong>
           <div className="text-sm text-yellow-800 mt-1">
             You can see who’s participating below. Team/GOTW/POTW selections and points will appear at unlock.
           </div>
         </div>
       )}
 
-      {/* Locked view: show ONLY names (no dashes/blank cells) */}
-      {isLocked ? (
+      {/* Locked view: show ONLY names (no dashes/blank columns) */}
+      {lockedUI ? (
         <div className="overflow-x-auto">
           <table className="min-w-full border rounded">
             <thead className="bg-gray-100">
