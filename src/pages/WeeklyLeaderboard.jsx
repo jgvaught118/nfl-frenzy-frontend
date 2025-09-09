@@ -4,6 +4,7 @@ import { useParams, useNavigate } from "react-router-dom";
 import axios from "axios";
 import LeaderboardTabs from "../components/LeaderboardTabs";
 
+/* -------------------- styling helpers -------------------- */
 const badgeClass = {
   winner: "bg-amber-500 text-white",
   gotw1: "bg-green-600 text-white",
@@ -16,13 +17,14 @@ function rowClasses(p, isLocked) {
   if (isLocked) return "bg-white";
   if (p.is_correct_pick === true) {
     return p.is_favorite === true
-      ? "bg-yellow-100 ring-1 ring-yellow-300"
-      : "bg-green-100 ring-1 ring-green-300";
+      ? "bg-yellow-50 ring-1 ring-yellow-200"
+      : "bg-green-50 ring-1 ring-green-200";
   }
-  if (p.is_correct_pick === false) return "bg-red-100 ring-1 ring-red-300";
+  if (p.is_correct_pick === false) return "bg-red-50 ring-1 ring-red-200";
   return "bg-white";
 }
 
+/* -------------------- time helpers -------------------- */
 function parseKickoff(g) {
   const raw = g?.kickoff ?? g?.start_time ?? g?.kickoff_time ?? g?.game_time;
   const d = new Date(raw);
@@ -32,13 +34,15 @@ function earliestSundayISO(games = []) {
   const sundays = games
     .map(parseKickoff)
     .filter(Boolean)
-    .filter((d) => d.getUTCDay() === 0)
+    .filter((d) => d.getUTCDay() === 0) // Sunday
     .sort((a, b) => a - b);
   return sundays[0]?.toISOString() || null;
 }
+
+/* -------------------- data normalization helpers -------------------- */
 const safeKey = (s) => (s ? String(s).trim().toLowerCase() : null);
 
-function nameOf(p, idx = 0) {
+function displayNameOf(p, idx = 0) {
   return (
     p.display_name ||
     p.first_name ||
@@ -48,6 +52,7 @@ function nameOf(p, idx = 0) {
     `Player ${idx + 1}`
   );
 }
+
 const firstDefined = (...vals) =>
   vals.find((v) => v !== null && v !== undefined && v !== "") ?? null;
 
@@ -56,9 +61,10 @@ function normalizePublicPick(x = {}) {
   const first_name = firstDefined(x.first_name, x.display_name, x.name);
   return {
     keyName: safeKey(first_name),
-    user_id: x.user_id ?? null, // not present in your payload, but keep for future
+    user_id: x.user_id ?? null, // your current payload may not include this; future-proof
     display_name: first_name,
     email: x.email ?? null,
+
     team: firstDefined(
       x.team,
       x.team_pick,
@@ -83,7 +89,12 @@ function normalizePublicPick(x = {}) {
       x.player_of_the_week
     ),
     is_favorite: firstDefined(x.is_favorite, x.favorite, null),
-    is_correct_pick: firstDefined(x.is_correct_pick, x.correct, x.correct_pick, null),
+    is_correct_pick: firstDefined(
+      x.is_correct_pick,
+      x.correct,
+      x.correct_pick,
+      null
+    ),
     gotw_rank: x.gotw_rank ?? null,
     potw_exact: !!x.potw_exact,
   };
@@ -123,14 +134,25 @@ function normalizeLeaderboardRow(r = {}) {
       r.player_of_the_week
     ),
     is_favorite: firstDefined(r.is_favorite, r.favorite, null),
-    is_correct_pick: firstDefined(r.is_correct_pick, r.correct, r.correct_pick, null),
+    is_correct_pick: firstDefined(
+      r.is_correct_pick,
+      r.correct,
+      r.correct_pick,
+      null
+    ),
     gotw_rank: r.gotw_rank ?? null,
     potw_exact: !!r.potw_exact,
 
     // scoring
-    base_points: Number.isFinite(Number(r.base_points)) ? Number(r.base_points) : null,
-    bonus_points: Number.isFinite(Number(r.bonus_points)) ? Number(r.bonus_points) : null,
-    total_points: Number.isFinite(Number(r.total_points)) ? Number(r.total_points) : null,
+    base_points: Number.isFinite(Number(r.base_points))
+      ? Number(r.base_points)
+      : null,
+    bonus_points: Number.isFinite(Number(r.bonus_points))
+      ? Number(r.bonus_points)
+      : null,
+    total_points: Number.isFinite(Number(r.total_points))
+      ? Number(r.total_points)
+      : null,
     is_weekly_winner: !!r.is_weekly_winner,
   };
 }
@@ -139,8 +161,12 @@ function normalizeLeaderboardRow(r = {}) {
  *  Priority: match by user_id if both present; otherwise by keyName (first_name).
  */
 function mergeSelections(rows = [], publicPicks = []) {
-  const byId = new Map(publicPicks.filter(p => p.user_id != null).map(p => [p.user_id, p]));
-  const byName = new Map(publicPicks.filter(p => p.keyName).map(p => [p.keyName, p]));
+  const byId = new Map(
+    publicPicks.filter((p) => p.user_id != null).map((p) => [p.user_id, p])
+  );
+  const byName = new Map(
+    publicPicks.filter((p) => p.keyName).map((p) => [p.keyName, p])
+  );
 
   return rows.map((r) => {
     const pub =
@@ -160,6 +186,8 @@ function mergeSelections(rows = [], publicPicks = []) {
     };
   });
 }
+
+/* ========================================================= */
 
 export default function WeeklyLeaderboard() {
   const { week: weekParam } = useParams();
@@ -182,7 +210,7 @@ export default function WeeklyLeaderboard() {
 
   const [computedUnlockISO, setComputedUnlockISO] = useState(null);
 
-  // Normalize week param (or redirect to current)
+  /* 1) normalize week param (redirect to current if invalid) */
   useEffect(() => {
     if (weekParam === "overall") {
       navigate("/leaderboard/overall", { replace: true });
@@ -199,8 +227,10 @@ export default function WeeklyLeaderboard() {
           `${import.meta.env.VITE_BACKEND_URL}/admin/current_week`
         );
         const payload = res.data || {};
-        const cw = payload.current_week !== undefined ? payload.current_week : payload;
-        const wk = (typeof cw === "object" ? cw.week_number || cw.week : cw) || 1;
+        const cw =
+          payload.current_week !== undefined ? payload.current_week : payload;
+        const wk =
+          (typeof cw === "object" ? cw.week_number || cw.week : cw) || 1;
         const n2 = Number(wk) || 1;
         setWeek(n2);
         const qs = window.location.search || "";
@@ -213,7 +243,7 @@ export default function WeeklyLeaderboard() {
     })();
   }, [weekParam, navigate]);
 
-  // Load data
+  /* 2) load leaderboard + (if unlocked) merge public picks */
   useEffect(() => {
     if (week == null) return;
 
@@ -223,24 +253,27 @@ export default function WeeklyLeaderboard() {
       setComputedUnlockISO(null);
 
       try {
-        // 1) Primary leaderboard
+        // primary leaderboard
         const res = await axios.get(
           `${import.meta.env.VITE_BACKEND_URL}/leaderboard/week/${week}${
             window.location.search || ""
           }`
         );
         const d = res.data || {};
-        let rows = Array.isArray(d.rows) ? d.rows.map(normalizeLeaderboardRow) : [];
+        let rows = Array.isArray(d.rows)
+          ? d.rows.map(normalizeLeaderboardRow)
+          : [];
 
-        // 2) If UNLOCKED (either backend says unlocked OR we detect picks visible), overlay public picks by FIRST NAME
         const backendLocked = !!d.locked;
         const anyPickVisible = rows.some(
           (r) =>
-            r.team != null || r.gotw_prediction != null || r.potw_prediction != null
+            r.team != null ||
+            r.gotw_prediction != null ||
+            r.potw_prediction != null
         );
-        const shouldOverlay = !backendLocked; // overlay whenever unlocked
 
-        if (shouldOverlay) {
+        // overlay public picks when unlocked
+        if (!backendLocked) {
           try {
             const resPub = await axios.get(
               `${import.meta.env.VITE_BACKEND_URL}/picks/week/${week}/public${
@@ -251,7 +284,7 @@ export default function WeeklyLeaderboard() {
             const publicPicks = (p.picks || []).map(normalizePublicPick);
             rows = mergeSelections(rows, publicPicks);
 
-            // Prefer explicit lock from backend; otherwise inherit from public endpoint
+            // inherit lock/qa metadata if primary omitted it
             d.locked = d.locked ?? p.locked;
             d.unlock_at_iso = d.unlock_at_iso ?? p.unlock_at_iso;
             d.qa_mode = d.qa_mode ?? p.qa_mode;
@@ -263,7 +296,8 @@ export default function WeeklyLeaderboard() {
         setWeekly({
           week: Number(d.week ?? week),
           factor: Number(d.factor ?? 1) || 1,
-          locked: !!d.locked && !anyPickVisible, // if picks visible, force unlocked UI
+          // if any picks visible, force unlocked in UI even if d.locked happened to be true
+          locked: !!d.locked && !anyPickVisible,
           unlock_at_iso: d.unlock_at_iso || null,
           qa_mode: !!d.qa_mode,
           gotw: d.gotw || { actual_total: null },
@@ -271,7 +305,7 @@ export default function WeeklyLeaderboard() {
           rows,
         });
       } catch (e1) {
-        // 3) Fallback to public endpoint only
+        // fallback: public-only view
         try {
           const res2 = await axios.get(
             `${import.meta.env.VITE_BACKEND_URL}/picks/week/${week}/public${
@@ -312,7 +346,7 @@ export default function WeeklyLeaderboard() {
     load();
   }, [week]);
 
-  // Compute unlock time if missing
+  /* 3) compute unlock time if backend didn't send one */
   useEffect(() => {
     if (week == null) return;
     if (weekly.unlock_at_iso) {
@@ -324,7 +358,9 @@ export default function WeeklyLeaderboard() {
         const res = await axios.get(
           `${import.meta.env.VITE_BACKEND_URL}/games/week/${week}`
         );
-        const unlock = earliestSundayISO(Array.isArray(res.data) ? res.data : []);
+        const unlock = earliestSundayISO(
+          Array.isArray(res.data) ? res.data : []
+        );
         setComputedUnlockISO(unlock);
       } catch {
         setComputedUnlockISO(null);
@@ -332,7 +368,7 @@ export default function WeeklyLeaderboard() {
     })();
   }, [week, weekly.unlock_at_iso]);
 
-  // Locked UI?
+  /* 4) lock detection for UI (names-only vs full table) */
   const lockedUI = useMemo(() => {
     if (weekly.locked) return true;
     const rows = weekly.rows || [];
@@ -346,18 +382,22 @@ export default function WeeklyLeaderboard() {
     return !anyPickVisible;
   }, [weekly.locked, weekly.rows]);
 
+  /* unlock text for banner */
   const unlockISO = weekly.unlock_at_iso || computedUnlockISO || null;
   const unlockText = unlockISO
     ? new Date(unlockISO).toLocaleString()
     : "Sunday 11:00 AM (Arizona)";
 
-  // Sorting
+  /* sorting */
   const rows = useMemo(() => {
     const arr = [...(weekly.rows || [])];
     if (lockedUI) {
-      arr.sort((a, b) => nameOf(a).localeCompare(nameOf(b)));
+      arr.sort((a, b) =>
+        displayNameOf(a).localeCompare(displayNameOf(b))
+      );
       return arr;
     }
+    // unlocked: winners first, then by total points desc, then by name
     arr.sort((a, b) => {
       const aWin = !!a.is_weekly_winner;
       const bWin = !!b.is_weekly_winner;
@@ -365,11 +405,12 @@ export default function WeeklyLeaderboard() {
       const tpA = Number(a.total_points ?? 0);
       const tpB = Number(b.total_points ?? 0);
       if (tpB !== tpA) return tpB - tpA;
-      return nameOf(a).localeCompare(nameOf(b));
+      return displayNameOf(a).localeCompare(displayNameOf(b));
     });
     return arr;
   }, [weekly.rows, lockedUI]);
 
+  /* -------------------- render -------------------- */
   if (loading) return <div className="p-6">Loading weekly leaderboard…</div>;
   if (err) return <div className="p-6 text-red-600">{err}</div>;
 
@@ -391,18 +432,19 @@ export default function WeeklyLeaderboard() {
           Public picks are hidden to prevent spoilers.{" "}
           <strong>Picks unlock at {unlockText}.</strong>
           <div className="text-sm text-yellow-800 mt-1">
-            You can see who’s participating below. Team/GOTW/POTW selections and points will appear at unlock.
+            You can see who’s participating below. Team/GOTW/POTW selections and
+            points will appear at unlock.
           </div>
         </div>
       )}
 
       {lockedUI ? (
-        // Locked: names only
+        /* -------------------- LOCKED: names only -------------------- */
         <div className="overflow-x-auto">
           <table className="min-w-full border rounded">
             <thead className="bg-gray-100">
               <tr>
-                <th className="text-left px-3 py-2 border-b">#</th>
+                <th className="text-left px-3 py-2 border-b w-14">#</th>
                 <th className="text-left px-3 py-2 border-b">Name</th>
               </tr>
             </thead>
@@ -415,9 +457,11 @@ export default function WeeklyLeaderboard() {
                 </tr>
               ) : (
                 rows.map((p, idx) => (
-                  <tr key={`${nameOf(p, idx)}-${idx}`} className="bg-white">
+                  <tr key={`${displayNameOf(p, idx)}-${idx}`} className="bg-white">
                     <td className="px-3 py-2 border-b align-top">{idx + 1}</td>
-                    <td className="px-3 py-2 border-b align-top">{nameOf(p, idx)}</td>
+                    <td className="px-3 py-2 border-b align-top">
+                      {displayNameOf(p, idx)}
+                    </td>
                   </tr>
                 ))
               )}
@@ -428,19 +472,25 @@ export default function WeeklyLeaderboard() {
           )}
         </div>
       ) : (
-        // Unlocked: full details
+        /* -------------------- UNLOCKED: full details -------------------- */
         <div className="overflow-x-auto">
           <table className="min-w-full border rounded">
             <thead className="bg-gray-100">
               <tr>
-                <th className="text-left px-3 py-2 border-b">#</th>
-                <th className="text-left px-3 py-2 border-b">Name</th>
-                <th className="text-left px-3 py-2 border-b">Team Pick</th>
-                <th className="text-left px-3 py-2 border-b">GOTW Pick</th>
-                <th className="text-left px-3 py-2 border-b">POTW Pick</th>
-                <th className="text-left px-3 py-2 border-b">Base</th>
-                <th className="text-left px-3 py-2 border-b">Bonus</th>
-                <th className="text-left px-3 py-2 border-b">Total</th>
+                <th className="text-left px-3 py-2 border-b w-14">#</th>
+                <th className="text-left px-3 py-2 border-b min-w-[10rem]">Name</th>
+                <th className="text-left px-3 py-2 border-b min-w-[12rem]">
+                  Team Pick
+                </th>
+                <th className="text-left px-3 py-2 border-b min-w-[10rem]">
+                  GOTW Pick
+                </th>
+                <th className="text-left px-3 py-2 border-b min-w-[10rem]">
+                  POTW Pick
+                </th>
+                <th className="text-right px-3 py-2 border-b w-16">Base</th>
+                <th className="text-right px-3 py-2 border-b w-16">Bonus</th>
+                <th className="text-right px-3 py-2 border-b w-16">Total</th>
               </tr>
             </thead>
             <tbody>
@@ -450,47 +500,69 @@ export default function WeeklyLeaderboard() {
                 const showBase = Number.isFinite(Number(p.base_points));
                 const showBonus = Number.isFinite(Number(p.bonus_points));
                 return (
-                  <tr key={`${nameOf(p, idx)}-${idx}`} className={classes}>
+                  <tr key={`${displayNameOf(p, idx)}-${idx}`} className={classes}>
                     <td className="px-3 py-2 border-b align-top">
                       {idx + 1}
                       {p.is_weekly_winner && (
-                        <span className={`ml-2 text-xs px-2 py-0.5 rounded ${badgeClass.winner}`}>
+                        <span
+                          className={`ml-2 text-xs px-2 py-0.5 rounded ${badgeClass.winner}`}
+                        >
                           ⭐ Winner
                         </span>
                       )}
                     </td>
 
-                    <td className="px-3 py-2 border-b align-top">{nameOf(p, idx)}</td>
+                    <td className="px-3 py-2 border-b align-top">
+                      {displayNameOf(p, idx)}
+                    </td>
 
                     <td className="px-3 py-2 border-b align-top">
                       <div className="flex items-center gap-2">
-                        <span>{p.team ?? "—"}</span>
+                        <span className="inline-block min-w-[8rem]">
+                          {p.team ?? "—"}
+                        </span>
                         {p.is_favorite === true && (
-                          <span className="text-xs rounded bg-yellow-200 px-1">Favorite</span>
+                          <span className="text-xs rounded bg-yellow-200 px-1">
+                            Favorite
+                          </span>
                         )}
                         {p.is_favorite === false && (
-                          <span className="text-xs rounded bg-green-200 px-1">Underdog</span>
+                          <span className="text-xs rounded bg-green-200 px-1">
+                            Underdog
+                          </span>
                         )}
-                        {p.is_correct_pick === true && <span className="text-xs">✔️</span>}
-                        {p.is_correct_pick === false && <span className="text-xs">❌</span>}
+                        {p.is_correct_pick === true && (
+                          <span className="text-xs">✔️</span>
+                        )}
+                        {p.is_correct_pick === false && (
+                          <span className="text-xs">❌</span>
+                        )}
                       </div>
                     </td>
 
                     <td className="px-3 py-2 border-b align-top">
                       <div className="flex items-center gap-2">
-                        <span>{p.gotw_prediction ?? "—"}</span>
+                        <span className="inline-block min-w-[3rem]">
+                          {p.gotw_prediction ?? "—"}
+                        </span>
                         {p.gotw_rank === 1 && (
-                          <span className={`text-xs px-2 py-0.5 rounded ${badgeClass.gotw1}`}>
+                          <span
+                            className={`text-xs px-2 py-0.5 rounded ${badgeClass.gotw1}`}
+                          >
                             GOTW 1st
                           </span>
                         )}
                         {p.gotw_rank === 2 && (
-                          <span className={`text-xs px-2 py-0.5 rounded ${badgeClass.gotw2}`}>
+                          <span
+                            className={`text-xs px-2 py-0.5 rounded ${badgeClass.gotw2}`}
+                          >
                             GOTW 2nd
                           </span>
                         )}
                         {p.gotw_rank === 3 && (
-                          <span className={`text-xs px-2 py-0.5 rounded ${badgeClass.gotw3}`}>
+                          <span
+                            className={`text-xs px-2 py-0.5 rounded ${badgeClass.gotw3}`}
+                          >
                             GOTW 3rd
                           </span>
                         )}
@@ -499,26 +571,27 @@ export default function WeeklyLeaderboard() {
 
                     <td className="px-3 py-2 border-b align-top">
                       <div className="flex items-center gap-2">
-                        <span>{p.potw_prediction ?? "—"}</span>
+                        <span className="inline-block min-w-[3rem]">
+                          {p.potw_prediction ?? "—"}
+                        </span>
                         {p.potw_exact && (
-                          <span className={`text-xs px-2 py-0.5 rounded ${badgeClass.potwExact}`}>
+                          <span
+                            className={`text-xs px-2 py-0.5 rounded ${badgeClass.potwExact}`}
+                          >
                             Exact
                           </span>
                         )}
                       </div>
                     </td>
 
-                    <td className="px-3 py-2 border-b align-top">
+                    <td className="px-3 py-2 border-b align-top text-right">
                       {showBase ? Number(p.base_points) : "—"}
                     </td>
-                    <td className="px-3 py-2 border-b align-top">
+                    <td className="px-3 py-2 border-b align-top text-right">
                       {showBonus ? Number(p.bonus_points) : "—"}
                     </td>
-
-                    <td className="px-3 py-2 border-b align-top">
-                      <span className="inline-block min-w-8 text-center font-bold">
-                        {Number(p.total_points ?? 0)}
-                      </span>
+                    <td className="px-3 py-2 border-b align-top text-right font-bold">
+                      {Number(p.total_points ?? 0)}
                     </td>
                   </tr>
                 );
