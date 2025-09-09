@@ -25,68 +25,7 @@ function rowClasses(p, isLocked) {
   return "bg-white";
 }
 
-/** Normalize minimal fields so Team/GOTW/POTW render even if keys vary slightly */
-function normalizeRow(r = {}) {
-  const team =
-    r.team ??
-    r.pick_team ??
-    r.selected_team ??
-    r.selection ??
-    r.team_pick ??
-    null;
-
-  const gotw_prediction =
-    r.gotw_prediction ?? r.gotw_guess ?? r.gotw_pick ?? r.gotw ?? null;
-
-  const potw_prediction =
-    r.potw_prediction ?? r.potw_guess ?? r.potw_pick ?? r.potw ?? null;
-
-  const is_favorite =
-    r.is_favorite ?? (typeof r.favorite === "boolean" ? r.favorite : null);
-
-  const is_correct_pick =
-    r.is_correct_pick ?? (typeof r.correct === "boolean" ? r.correct : null);
-
-  const gotw_rank =
-    r.gotw_rank ??
-    r.gotw_place ??
-    (Number.isFinite(Number(r.gotw_points_rank))
-      ? Number(r.gotw_points_rank)
-      : null);
-
-  const potw_exact =
-    r.potw_exact ??
-    (typeof r.is_potw_exact === "boolean" ? r.is_potw_exact : false);
-
-  const base_points =
-    Number.isFinite(Number(r.base_points)) ? Number(r.base_points) : r.base_points ?? null;
-
-  const bonus_points =
-    Number.isFinite(Number(r.bonus_points)) ? Number(r.bonus_points) : r.bonus_points ?? null;
-
-  const total_points =
-    Number.isFinite(Number(r.total_points)) ? Number(r.total_points) : r.total_points ?? null;
-
-  const is_weekly_winner =
-    !!(r.is_weekly_winner || r.winner || r.award === 3);
-
-  return {
-    ...r,
-    team,
-    gotw_prediction: gotw_prediction ?? null,
-    potw_prediction: potw_prediction ?? null,
-    is_favorite,
-    is_correct_pick,
-    gotw_rank: Number.isFinite(Number(gotw_rank)) ? Number(gotw_rank) : null,
-    potw_exact: !!potw_exact,
-    base_points: base_points ?? null,
-    bonus_points: bonus_points ?? null,
-    total_points: total_points ?? null,
-    is_weekly_winner,
-  };
-}
-
-/** Safer name helper */
+/** Name helper */
 function displayNameOf(p, fallbackIndex = 0) {
   return (
     p.display_name ||
@@ -98,35 +37,125 @@ function displayNameOf(p, fallbackIndex = 0) {
   );
 }
 
-/** Parse a kickoff datetime from various backend shapes */
+function emailKey(v) {
+  return (v || "").trim().toLowerCase();
+}
+
+/** Robust field normalization for rows (leaderboard or public picks) */
+function normalizeRow(r = {}) {
+  // team
+  const team =
+    r.team ??
+    r.team_pick ??
+    r.pick_team ??
+    r.selected_team ??
+    r.selection ??
+    r.team_name ??
+    r.team_abbr ??
+    null;
+
+  // GOTW
+  const gotw_prediction =
+    r.gotw_prediction ??
+    r.gotw_pick ??
+    r.gotw_guess ??
+    r.gotw ??
+    r.game_of_the_week ??
+    null;
+
+  // POTW
+  const potw_prediction =
+    r.potw_prediction ??
+    r.potw_pick ??
+    r.potw_guess ??
+    r.potw ??
+    r.player_of_the_week ??
+    null;
+
+  const is_favorite =
+    typeof r.is_favorite === "boolean"
+      ? r.is_favorite
+      : typeof r.favorite === "boolean"
+      ? r.favorite
+      : null;
+
+  const is_correct_pick =
+    typeof r.is_correct_pick === "boolean"
+      ? r.is_correct_pick
+      : typeof r.correct === "boolean"
+      ? r.correct
+      : null;
+
+  const gotw_rankRaw =
+    r.gotw_rank ??
+    r.gotw_place ??
+    r.gotw_points_rank ??
+    r.gotw_position ??
+    null;
+  const gotw_rank =
+    Number.isFinite(Number(gotw_rankRaw)) ? Number(gotw_rankRaw) : null;
+
+  const potw_exact =
+    typeof r.potw_exact === "boolean"
+      ? r.potw_exact
+      : typeof r.is_potw_exact === "boolean"
+      ? r.is_potw_exact
+      : false;
+
+  const base_points = Number.isFinite(Number(r.base_points))
+    ? Number(r.base_points)
+    : r.base_points ?? null;
+
+  const bonus_points = Number.isFinite(Number(r.bonus_points))
+    ? Number(r.bonus_points)
+    : r.bonus_points ?? null;
+
+  const total_points = Number.isFinite(Number(r.total_points))
+    ? Number(r.total_points)
+    : r.total_points ?? null;
+
+  const is_weekly_winner = !!(r.is_weekly_winner || r.winner || r.award === 3);
+
+  return {
+    ...r,
+    team,
+    gotw_prediction: gotw_prediction ?? null,
+    potw_prediction: potw_prediction ?? null,
+    is_favorite,
+    is_correct_pick,
+    gotw_rank,
+    potw_exact,
+    base_points: base_points ?? null,
+    bonus_points: bonus_points ?? null,
+    total_points: total_points ?? null,
+    is_weekly_winner,
+  };
+}
+
+/** Kickoff helpers for fallback unlock time */
 function parseKickoff(g) {
   const raw = g.kickoff ?? g.start_time ?? g.kickoff_time ?? g.game_time;
   const d = new Date(raw);
   return isNaN(d.getTime()) ? null : d;
 }
-
-/** Earliest Sunday (by UTC weekday) in the slate */
 function earliestSundayUTC(games = []) {
   const sundays = games
     .map(parseKickoff)
     .filter(Boolean)
-    .filter((d) => d.getUTCDay() === 0) // Sunday
+    .filter((d) => d.getUTCDay() === 0)
     .sort((a, b) => a - b);
   return sundays[0] || null;
 }
-
-/** Fallback unlock time: Sunday 10:00 AM Arizona (UTC-7 => 17:00 UTC) */
 function fallbackUnlockISOFromGames(games = []) {
   const firstSunday = earliestSundayUTC(games);
   if (!firstSunday) return null;
   const y = firstSunday.getUTCFullYear();
   const m = firstSunday.getUTCMonth();
   const d = firstSunday.getUTCDate();
-  const unlockUTC = new Date(Date.UTC(y, m, d, 17, 0, 0)); // 17:00 UTC == 10:00 AM AZ
+  // 17:00 UTC ≈ 10:00 AM Arizona
+  const unlockUTC = new Date(Date.UTC(y, m, d, 17, 0, 0));
   return unlockUTC.toISOString();
 }
-
-/** URL override: ?debug_unlocked=1 */
 function isDebugUnlocked() {
   const sp = new URLSearchParams(window.location.search);
   return sp.get("debug_unlocked") === "1";
@@ -153,10 +182,11 @@ export default function WeeklyLeaderboard() {
 
   const [computedUnlockISO, setComputedUnlockISO] = useState(null);
 
-  // also hold picks (for unlocked merge)
-  const [picksByUser, setPicksByUser] = useState(null);
+  // picks maps for merge (when unlocked)
+  const [picksByUserId, setPicksByUserId] = useState(null);
+  const [picksByEmail, setPicksByEmail] = useState(null);
 
-  // 1) Normalize week param (redirect to current if invalid)
+  // Validate/normalize week param
   useEffect(() => {
     if (weekParam === "overall") {
       navigate("/leaderboard/overall", { replace: true });
@@ -188,7 +218,7 @@ export default function WeeklyLeaderboard() {
     })();
   }, [weekParam, navigate]);
 
-  // 2) Load weekly leaderboard
+  // Load weekly leaderboard
   useEffect(() => {
     if (week == null) return;
 
@@ -196,7 +226,8 @@ export default function WeeklyLeaderboard() {
       setLoading(true);
       setErr("");
       setComputedUnlockISO(null);
-      setPicksByUser(null); // reset until we fetch (if needed)
+      setPicksByUserId(null);
+      setPicksByEmail(null);
 
       try {
         const res = await axios.get(
@@ -217,7 +248,7 @@ export default function WeeklyLeaderboard() {
           rows,
         });
       } catch (e1) {
-        // Fallback: legacy public feed (names + picks, no points)
+        // Fallback: legacy public picks (names + selections, no points)
         try {
           const res2 = await axios.get(
             `${import.meta.env.VITE_BACKEND_URL}/picks/week/${week}/public${
@@ -235,7 +266,6 @@ export default function WeeklyLeaderboard() {
                 x.potw_prediction ?? x.potw_guess ?? x.potw ?? null,
             })
           );
-          // with legacy, we don't have points; keep factor=1
           setWeekly({
             week,
             factor: 1,
@@ -262,7 +292,7 @@ export default function WeeklyLeaderboard() {
     load();
   }, [week]);
 
-  // 3) If unlock_at_iso is missing, compute a fallback unlock at Sun 10:00 AM AZ
+  // Fallback unlock time if backend didn't send one
   useEffect(() => {
     if (week == null) return;
     if (weekly.unlock_at_iso) {
@@ -277,31 +307,24 @@ export default function WeeklyLeaderboard() {
         const unlock = fallbackUnlockISOFromGames(
           Array.isArray(res.data) ? res.data : []
         );
-        setComputedUnlockISO(unlock); // may be null if no Sunday games found
+        setComputedUnlockISO(unlock);
       } catch {
         setComputedUnlockISO(null);
       }
     })();
   }, [week, weekly.unlock_at_iso]);
 
-  // 4) Locking logic
+  // Lock logic
   const unlockISO = weekly.unlock_at_iso || computedUnlockISO || null;
   const now = new Date();
   const shouldBeLocked =
     !isDebugUnlocked() &&
-    (
-      weekly.locked ||
-      (unlockISO ? now < new Date(unlockISO) : true) // if no unlock time known, stay locked
-    );
+    (weekly.locked || (unlockISO ? now < new Date(unlockISO) : true));
 
-  const unlockText = unlockISO
-    ? new Date(unlockISO).toLocaleString()
-    : "Sunday 10:00 AM (Arizona)";
-
-  // 5) When UNLOCKED, fetch public picks and merge into leaderboard rows
+  // When UNLOCKED, fetch public picks and build both maps (by user_id and by email)
   useEffect(() => {
     if (week == null) return;
-    if (shouldBeLocked) return; // nothing to fetch/merge while locked
+    if (shouldBeLocked) return;
 
     let cancelled = false;
     (async () => {
@@ -312,21 +335,35 @@ export default function WeeklyLeaderboard() {
           }`
         );
         const p = res.data || { picks: [] };
-        const map = new Map();
+        const byId = new Map();
+        const byEmail = new Map();
+
         (p.picks || []).forEach((x) => {
           const n = normalizeRow({
             ...x,
-            team: x.team ?? x.pick_team ?? null,
+            team: x.team ?? x.team_pick ?? x.pick_team ?? null,
             gotw_prediction:
-              x.gotw_prediction ?? x.gotw_guess ?? x.gotw ?? null,
+              x.gotw_prediction ?? x.gotw_pick ?? x.gotw_guess ?? x.gotw ?? null,
             potw_prediction:
-              x.potw_prediction ?? x.potw_guess ?? x.potw ?? null,
+              x.potw_prediction ?? x.potw_pick ?? x.potw_guess ?? x.potw ?? null,
           });
-          if (x.user_id != null) map.set(Number(x.user_id), n);
+
+          const uid = Number(x.user_id ?? x.userId ?? -1);
+          if (Number.isFinite(uid) && uid > 0) byId.set(uid, n);
+
+          const ek = emailKey(x.email || n.email);
+          if (ek) byEmail.set(ek, n);
         });
-        if (!cancelled) setPicksByUser(map);
+
+        if (!cancelled) {
+          setPicksByUserId(byId);
+          setPicksByEmail(byEmail);
+        }
       } catch {
-        if (!cancelled) setPicksByUser(null);
+        if (!cancelled) {
+          setPicksByUserId(new Map());
+          setPicksByEmail(new Map());
+        }
       }
     })();
 
@@ -335,36 +372,51 @@ export default function WeeklyLeaderboard() {
     };
   }, [week, shouldBeLocked]);
 
-  // 6) Merge picks into weekly rows when unlocked
+  // Merge picks into weekly rows (only when unlocked)
   const mergedRows = useMemo(() => {
     if (shouldBeLocked) return weekly.rows || [];
-
     const rows = [...(weekly.rows || [])].map((r) => ({ ...r }));
-    if (!picksByUser || picksByUser.size === 0) return rows;
+
+    const mapId = picksByUserId || new Map();
+    const mapEmail = picksByEmail || new Map();
 
     for (let i = 0; i < rows.length; i++) {
       const r = rows[i];
-      const u = Number(r.user_id ?? -1);
-      const pick = picksByUser.get(u);
+
+      // 1) try user_id
+      let pick =
+        mapId.get(Number(r.user_id ?? r.userId ?? -1)) ||
+        null;
+
+      // 2) fallback by email
+      if (!pick) {
+        const ek =
+          emailKey(r.email) ||
+          emailKey(r.user_email) ||
+          emailKey(r.contact) ||
+          "";
+        if (ek) pick = mapEmail.get(ek) || null;
+      }
+
       if (!pick) continue;
 
-      // Only fill if missing in leaderboard payload
+      // fill only if missing
       if (r.team == null && pick.team != null) r.team = pick.team;
       if (r.gotw_prediction == null && pick.gotw_prediction != null)
         r.gotw_prediction = pick.gotw_prediction;
       if (r.potw_prediction == null && pick.potw_prediction != null)
         r.potw_prediction = pick.potw_prediction;
 
-      // If backend didn’t flag favorite/correct, but picks included them:
       if (typeof r.is_favorite !== "boolean" && typeof pick.is_favorite === "boolean")
         r.is_favorite = pick.is_favorite;
       if (typeof r.is_correct_pick !== "boolean" && typeof pick.is_correct_pick === "boolean")
         r.is_correct_pick = pick.is_correct_pick;
     }
-    return rows;
-  }, [weekly.rows, picksByUser, shouldBeLocked]);
 
-  // Sort rows (names-only vs full unlocked)
+    return rows;
+  }, [weekly.rows, picksByUserId, picksByEmail, shouldBeLocked]);
+
+  // Sort rows for display
   const rows = useMemo(() => {
     const arr = [...mergedRows];
     if (shouldBeLocked) {
@@ -375,11 +427,9 @@ export default function WeeklyLeaderboard() {
       const aWin = !!a.is_weekly_winner;
       const bWin = !!b.is_weekly_winner;
       if (aWin !== bWin) return bWin - aWin;
-
       const tpA = Number(a.total_points ?? 0);
       const tpB = Number(b.total_points ?? 0);
       if (tpB !== tpA) return tpB - tpA;
-
       return displayNameOf(a).localeCompare(displayNameOf(b));
     });
     return arr;
@@ -404,15 +454,18 @@ export default function WeeklyLeaderboard() {
       {shouldBeLocked && (
         <div className="mb-4 p-3 rounded border border-yellow-300 bg-yellow-50 text-yellow-900">
           Public picks are hidden to prevent spoilers.{" "}
-          <strong>Picks unlock at {unlockISO ? new Date(unlockISO).toLocaleString() : "Sunday 10:00 AM (Arizona)"}.</strong>
+          <strong>
+            Picks unlock at{" "}
+            {unlockISO ? new Date(unlockISO).toLocaleString() : "Sunday 10:00 AM (Arizona)"}.
+          </strong>
           <div className="text-sm text-yellow-800 mt-1">
             You can see who’s participating below. Team/GOTW/POTW selections and points will appear at unlock.
           </div>
         </div>
       )}
 
-      {/* Locked view: names only */}
       {shouldBeLocked ? (
+        // Locked: names only
         <div className="overflow-x-auto">
           <table className="min-w-full border rounded">
             <thead className="bg-gray-100">
@@ -432,20 +485,16 @@ export default function WeeklyLeaderboard() {
                 rows.map((p, idx) => (
                   <tr key={`${displayNameOf(p, idx)}-${idx}`} className="bg-white">
                     <td className="px-3 py-2 border-b align-top">{idx + 1}</td>
-                    <td className="px-3 py-2 border-b align-top">
-                      {displayNameOf(p, idx)}
-                    </td>
+                    <td className="px-3 py-2 border-b align-top">{displayNameOf(p, idx)}</td>
                   </tr>
                 ))
               )}
             </tbody>
           </table>
-          {weekly.qa_mode && (
-            <div className="mt-3 text-xs text-gray-500">QA Mode is ON</div>
-          )}
+          {weekly.qa_mode && <div className="mt-3 text-xs text-gray-500">QA Mode is ON</div>}
         </div>
       ) : (
-        // Unlocked view: full details
+        // Unlocked: full details
         <div className="overflow-x-auto">
           <table className="min-w-full border rounded">
             <thead className="bg-gray-100">
@@ -463,8 +512,7 @@ export default function WeeklyLeaderboard() {
             <tbody>
               {rows.map((p, idx) => {
                 const classes =
-                  rowClasses(p, false) +
-                  (p.is_weekly_winner ? " font-semibold" : "");
+                  rowClasses(p, false) + (p.is_weekly_winner ? " font-semibold" : "");
                 const showBase = Number.isFinite(Number(p.base_points));
                 const showBonus = Number.isFinite(Number(p.bonus_points));
                 return (
@@ -472,30 +520,22 @@ export default function WeeklyLeaderboard() {
                     <td className="px-3 py-2 border-b align-top">
                       {idx + 1}
                       {p.is_weekly_winner && (
-                        <span
-                          className={`ml-2 text-xs px-2 py-0.5 rounded ${badgeClass.winner}`}
-                        >
+                        <span className={`ml-2 text-xs px-2 py-0.5 rounded ${badgeClass.winner}`}>
                           ⭐ Winner
                         </span>
                       )}
                     </td>
 
-                    <td className="px-3 py-2 border-b align-top">
-                      {displayNameOf(p, idx)}
-                    </td>
+                    <td className="px-3 py-2 border-b align-top">{displayNameOf(p, idx)}</td>
 
                     <td className="px-3 py-2 border-b align-top">
                       <div className="flex items-center gap-2">
                         <span>{p.team || "—"}</span>
                         {p.is_favorite === true && (
-                          <span className="text-xs rounded bg-yellow-200 px-1">
-                            Favorite
-                          </span>
+                          <span className="text-xs rounded bg-yellow-200 px-1">Favorite</span>
                         )}
                         {p.is_favorite === false && (
-                          <span className="text-xs rounded bg-green-200 px-1">
-                            Underdog
-                          </span>
+                          <span className="text-xs rounded bg-green-200 px-1">Underdog</span>
                         )}
                         {p.is_correct_pick === true && <span className="text-xs">✔️</span>}
                         {p.is_correct_pick === false && <span className="text-xs">❌</span>}
@@ -540,7 +580,6 @@ export default function WeeklyLeaderboard() {
                     <td className="px-3 py-2 border-b align-top">
                       {showBonus ? Number(p.bonus_points) : "—"}
                     </td>
-
                     <td className="px-3 py-2 border-b align-top">
                       <span className="inline-block min-w-8 text-center font-bold">
                         {Number(p.total_points ?? 0)}
@@ -559,9 +598,7 @@ export default function WeeklyLeaderboard() {
             </tbody>
           </table>
 
-          {weekly.qa_mode && (
-            <div className="mt-3 text-xs text-gray-500">QA Mode is ON</div>
-          )}
+          {weekly.qa_mode && <div className="mt-3 text-xs text-gray-500">QA Mode is ON</div>}
         </div>
       )}
     </div>
