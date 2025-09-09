@@ -25,38 +25,8 @@ function rowClasses(p, isLocked) {
   return "bg-white";
 }
 
-/** Parse a kickoff datetime from various backend shapes */
-function parseKickoff(g) {
-  const raw = g.kickoff ?? g.start_time ?? g.kickoff_time ?? g.game_time;
-  const d = new Date(raw);
-  return isNaN(d.getTime()) ? null : d;
-}
-
-/** Find earliest Sunday kickoff (UTC day 0) for a given array of games */
-function earliestSundayISO(games = []) {
-  const sundays = games
-    .map(parseKickoff)
-    .filter(Boolean)
-    .filter((d) => d.getUTCDay() === 0) // Sunday
-    .sort((a, b) => a - b);
-  return sundays[0]?.toISOString() || null;
-}
-
-/** Safer name helper so locked view never shows “Player 1/2…” unless truly unknown */
-function displayNameOf(p, fallbackIndex = 0) {
-  return (
-    p.display_name ||
-    p.first_name ||
-    p.name ||
-    (p.email ? p.email.split("@")[0] : "") ||
-    (p.user_id ? `User ${p.user_id}` : "") ||
-    `Player ${fallbackIndex + 1}`
-  );
-}
-
-/** Normalize one leaderboard row from any backend shape to a unified shape the UI expects */
+/** Normalize minimal fields so Team/GOTW/POTW render even if keys vary slightly */
 function normalizeRow(r = {}) {
-  // team (several possible keys)
   const team =
     r.team ??
     r.pick_team ??
@@ -65,32 +35,18 @@ function normalizeRow(r = {}) {
     r.team_pick ??
     null;
 
-  // favorite/underdog flags
-  const is_favorite =
-    r.is_favorite ??
-    (typeof r.favorite === "boolean" ? r.favorite : null);
-
-  // correctness of the pick
-  const is_correct_pick =
-    r.is_correct_pick ??
-    (typeof r.correct === "boolean" ? r.correct : null);
-
-  // GOTW & POTW predictions (allow strings, coerce to number where appropriate)
   const gotw_prediction =
-    r.gotw_prediction ??
-    r.gotw_guess ??
-    r.gotw_pick ??
-    r.gotw ??
-    null;
+    r.gotw_prediction ?? r.gotw_guess ?? r.gotw_pick ?? r.gotw ?? null;
 
   const potw_prediction =
-    r.potw_prediction ??
-    r.potw_guess ??
-    r.potw_pick ??
-    r.potw ??
-    null;
+    r.potw_prediction ?? r.potw_guess ?? r.potw_pick ?? r.potw ?? null;
 
-  // ranks/badges/exact flags
+  const is_favorite =
+    r.is_favorite ?? (typeof r.favorite === "boolean" ? r.favorite : null);
+
+  const is_correct_pick =
+    r.is_correct_pick ?? (typeof r.correct === "boolean" ? r.correct : null);
+
   const gotw_rank =
     r.gotw_rank ??
     r.gotw_place ??
@@ -102,51 +58,78 @@ function normalizeRow(r = {}) {
     r.potw_exact ??
     (typeof r.is_potw_exact === "boolean" ? r.is_potw_exact : false);
 
-  // points
   const base_points =
-    r.base_points ??
-    r.pick_points ??
-    (Number.isFinite(Number(r.points_base)) ? Number(r.points_base) : null);
+    Number.isFinite(Number(r.base_points)) ? Number(r.base_points) : r.base_points ?? null;
 
   const bonus_points =
-    r.bonus_points ??
-    r.extra_points ??
-    (Number.isFinite(Number(r.points_bonus)) ? Number(r.points_bonus) : null);
+    Number.isFinite(Number(r.bonus_points)) ? Number(r.bonus_points) : r.bonus_points ?? null;
 
   const total_points =
-    r.total_points ??
-    (Number.isFinite(Number(r.points_total)) ? Number(r.points_total) : null);
+    Number.isFinite(Number(r.total_points)) ? Number(r.total_points) : r.total_points ?? null;
 
-  // winner flag
   const is_weekly_winner =
-    r.is_weekly_winner ??
-    r.winner ??
-    r.award === 3 /* from podium */ ??
-    false;
+    !!(r.is_weekly_winner || r.winner || r.award === 3);
 
   return {
     ...r,
     team,
+    gotw_prediction: gotw_prediction ?? null,
+    potw_prediction: potw_prediction ?? null,
     is_favorite,
     is_correct_pick,
-    gotw_prediction:
-      gotw_prediction === "" || gotw_prediction == null
-        ? null
-        : gotw_prediction,
-    potw_prediction:
-      potw_prediction === "" || potw_prediction == null
-        ? null
-        : potw_prediction,
     gotw_rank: Number.isFinite(Number(gotw_rank)) ? Number(gotw_rank) : null,
     potw_exact: !!potw_exact,
-    base_points:
-      Number.isFinite(Number(base_points)) ? Number(base_points) : null,
-    bonus_points:
-      Number.isFinite(Number(bonus_points)) ? Number(bonus_points) : null,
-    total_points:
-      Number.isFinite(Number(total_points)) ? Number(total_points) : null,
-    is_weekly_winner: !!is_weekly_winner,
+    base_points: base_points ?? null,
+    bonus_points: bonus_points ?? null,
+    total_points: total_points ?? null,
+    is_weekly_winner,
   };
+}
+
+/** Safer name helper */
+function displayNameOf(p, fallbackIndex = 0) {
+  return (
+    p.display_name ||
+    p.first_name ||
+    p.name ||
+    (p.email ? p.email.split("@")[0] : "") ||
+    (p.user_id ? `User ${p.user_id}` : "") ||
+    `Player ${fallbackIndex + 1}`
+  );
+}
+
+/** Parse a kickoff datetime from various backend shapes */
+function parseKickoff(g) {
+  const raw = g.kickoff ?? g.start_time ?? g.kickoff_time ?? g.game_time;
+  const d = new Date(raw);
+  return isNaN(d.getTime()) ? null : d;
+}
+
+/** Earliest Sunday (by UTC weekday) in the slate */
+function earliestSundayUTC(games = []) {
+  const sundays = games
+    .map(parseKickoff)
+    .filter(Boolean)
+    .filter((d) => d.getUTCDay() === 0) // Sunday
+    .sort((a, b) => a - b);
+  return sundays[0] || null;
+}
+
+/** Fallback unlock time: Sunday 10:00 AM Arizona (UTC-7 => 17:00 UTC) */
+function fallbackUnlockISOFromGames(games = []) {
+  const firstSunday = earliestSundayUTC(games);
+  if (!firstSunday) return null;
+  const y = firstSunday.getUTCFullYear();
+  const m = firstSunday.getUTCMonth();
+  const d = firstSunday.getUTCDate();
+  const unlockUTC = new Date(Date.UTC(y, m, d, 17, 0, 0)); // 17:00 UTC == 10:00 AM AZ
+  return unlockUTC.toISOString();
+}
+
+/** URL override: ?debug_unlocked=1 */
+function isDebugUnlocked() {
+  const sp = new URLSearchParams(window.location.search);
+  return sp.get("debug_unlocked") === "1";
 }
 
 export default function WeeklyLeaderboard() {
@@ -238,18 +221,16 @@ export default function WeeklyLeaderboard() {
             }`
           );
           const p = res2.data || { picks: [] };
-          const rows = (p.picks || [])
-            .map((x) =>
-              normalizeRow({
-                ...x,
-                // help older payloads
-                team: x.team ?? x.pick_team ?? null,
-                gotw_prediction:
-                  x.gotw_prediction ?? x.gotw_guess ?? x.gotw ?? null,
-                potw_prediction:
-                  x.potw_prediction ?? x.potw_guess ?? x.potw ?? null,
-              })
-            );
+          const rows = (p.picks || []).map((x) =>
+            normalizeRow({
+              ...x,
+              team: x.team ?? x.pick_team ?? null,
+              gotw_prediction:
+                x.gotw_prediction ?? x.gotw_guess ?? x.gotw ?? null,
+              potw_prediction:
+                x.potw_prediction ?? x.potw_guess ?? x.potw ?? null,
+            })
+          );
           setWeekly({
             week,
             factor: 1,
@@ -276,7 +257,7 @@ export default function WeeklyLeaderboard() {
     load();
   }, [week]);
 
-  // 3) If unlock_at_iso is missing, compute earliest Sunday kickoff for THIS week
+  // 3) If unlock_at_iso is missing, compute a fallback unlock at Sun 10:00 AM AZ
   useEffect(() => {
     if (week == null) return;
     if (weekly.unlock_at_iso) {
@@ -288,42 +269,36 @@ export default function WeeklyLeaderboard() {
         const res = await axios.get(
           `${import.meta.env.VITE_BACKEND_URL}/games/week/${week}`
         );
-        const unlock = earliestSundayISO(Array.isArray(res.data) ? res.data : []);
-        setComputedUnlockISO(unlock); // null if no Sunday games
+        const unlock = fallbackUnlockISOFromGames(
+          Array.isArray(res.data) ? res.data : []
+        );
+        setComputedUnlockISO(unlock); // may be null if no Sunday games found
       } catch {
         setComputedUnlockISO(null);
       }
     })();
   }, [week, weekly.unlock_at_iso]);
 
-  // 4) Locked detection — only consider whether picks are hidden
-  const lockedUI = useMemo(() => {
-    if (weekly.locked) return true;
-    const rows = weekly.rows || [];
-    if (!rows.length) return true;
-    const anyPickVisible = rows.some(
-      (r) =>
-        r.team != null ||
-        r.gotw_prediction != null ||
-        r.potw_prediction != null
-    );
-    return !anyPickVisible;
-  }, [weekly.locked, weekly.rows]);
-
-  // Unlock time string
+  // 4) Locking logic — KEEP names-only when locked; show full data when unlocked.
   const unlockISO = weekly.unlock_at_iso || computedUnlockISO || null;
+  const now = new Date();
+  const shouldBeLocked =
+    !isDebugUnlocked() &&
+    (
+      weekly.locked ||
+      (unlockISO ? now < new Date(unlockISO) : true) // if no unlock time known, stay locked
+    );
+
   const unlockText = unlockISO
     ? new Date(unlockISO).toLocaleString()
-    : "Sunday 11:00 AM (Arizona)";
+    : "Sunday 10:00 AM (Arizona)";
 
   // Sort rows
   const rows = useMemo(() => {
     const arr = [...(weekly.rows || [])];
-    if (lockedUI) {
+    if (shouldBeLocked) {
       // Names only; alphabetical by derived display name
-      arr.sort((a, b) =>
-        displayNameOf(a).localeCompare(displayNameOf(b))
-      );
+      arr.sort((a, b) => displayNameOf(a).localeCompare(displayNameOf(b)));
       return arr;
     }
     // Full unlocked sort
@@ -339,7 +314,7 @@ export default function WeeklyLeaderboard() {
       return displayNameOf(a).localeCompare(displayNameOf(b));
     });
     return arr;
-  }, [weekly.rows, lockedUI]);
+  }, [weekly.rows, shouldBeLocked]);
 
   if (loading) return <div className="p-6">Loading weekly leaderboard…</div>;
   if (err) return <div className="p-6 text-red-600">{err}</div>;
@@ -351,7 +326,7 @@ export default function WeeklyLeaderboard() {
       <div className="flex items-center justify-between mb-3">
         <h2 className="text-2xl font-bold">Week {week} Leaderboard</h2>
 
-        {/* Always show double-points badge if factor > 1 (even when locked) */}
+        {/* Show double-points badge even when locked */}
         {weekly.factor > 1 && (
           <span className="inline-flex items-center gap-2 text-sm px-3 py-1 rounded bg-purple-100 text-purple-800 border border-purple-200">
             🔥 Double Points (×{weekly.factor})
@@ -359,7 +334,7 @@ export default function WeeklyLeaderboard() {
         )}
       </div>
 
-      {lockedUI && (
+      {shouldBeLocked && (
         <div className="mb-4 p-3 rounded border border-yellow-300 bg-yellow-50 text-yellow-900">
           Public picks are hidden to prevent spoilers.{" "}
           <strong>Picks unlock at {unlockText}.</strong>
@@ -370,7 +345,7 @@ export default function WeeklyLeaderboard() {
       )}
 
       {/* Locked view: names only */}
-      {lockedUI ? (
+      {shouldBeLocked ? (
         <div className="overflow-x-auto">
           <table className="min-w-full border rounded">
             <thead className="bg-gray-100">
@@ -455,12 +430,8 @@ export default function WeeklyLeaderboard() {
                             Underdog
                           </span>
                         )}
-                        {p.is_correct_pick === true && (
-                          <span className="text-xs">✔️</span>
-                        )}
-                        {p.is_correct_pick === false && (
-                          <span className="text-xs">❌</span>
-                        )}
+                        {p.is_correct_pick === true && <span className="text-xs">✔️</span>}
+                        {p.is_correct_pick === false && <span className="text-xs">❌</span>}
                       </div>
                     </td>
 
@@ -468,23 +439,17 @@ export default function WeeklyLeaderboard() {
                       <div className="flex items-center gap-2">
                         <span>{p.gotw_prediction ?? "—"}</span>
                         {p.gotw_rank === 1 && (
-                          <span
-                            className={`text-xs px-2 py-0.5 rounded ${badgeClass.gotw1}`}
-                          >
+                          <span className={`text-xs px-2 py-0.5 rounded ${badgeClass.gotw1}`}>
                             GOTW 1st
                           </span>
                         )}
                         {p.gotw_rank === 2 && (
-                          <span
-                            className={`text-xs px-2 py-0.5 rounded ${badgeClass.gotw2}`}
-                          >
+                          <span className={`text-xs px-2 py-0.5 rounded ${badgeClass.gotw2}`}>
                             GOTW 2nd
                           </span>
                         )}
                         {p.gotw_rank === 3 && (
-                          <span
-                            className={`text-xs px-2 py-0.5 rounded ${badgeClass.gotw3}`}
-                          >
+                          <span className={`text-xs px-2 py-0.5 rounded ${badgeClass.gotw3}`}>
                             GOTW 3rd
                           </span>
                         )}
@@ -495,9 +460,7 @@ export default function WeeklyLeaderboard() {
                       <div className="flex items-center gap-2">
                         <span>{p.potw_prediction ?? "—"}</span>
                         {p.potw_exact && (
-                          <span
-                            className={`text-xs px-2 py-0.5 rounded ${badgeClass.potwExact}`}
-                          >
+                          <span className={`text-xs px-2 py-0.5 rounded ${badgeClass.potwExact}`}>
                             Exact
                           </span>
                         )}
