@@ -153,6 +153,9 @@ export default function WeeklyLeaderboard() {
 
   const [computedUnlockISO, setComputedUnlockISO] = useState(null);
 
+  // also hold picks (for unlocked merge)
+  const [picksByUser, setPicksByUser] = useState(null);
+
   // 1) Normalize week param (redirect to current if invalid)
   useEffect(() => {
     if (weekParam === "overall") {
@@ -185,7 +188,7 @@ export default function WeeklyLeaderboard() {
     })();
   }, [weekParam, navigate]);
 
-  // 2) Load weekly scores (new endpoint, fallback to legacy)
+  // 2) Load weekly leaderboard
   useEffect(() => {
     if (week == null) return;
 
@@ -193,6 +196,7 @@ export default function WeeklyLeaderboard() {
       setLoading(true);
       setErr("");
       setComputedUnlockISO(null);
+      setPicksByUser(null); // reset until we fetch (if needed)
 
       try {
         const res = await axios.get(
@@ -213,7 +217,7 @@ export default function WeeklyLeaderboard() {
           rows,
         });
       } catch (e1) {
-        // Fallback: legacy public feed
+        // Fallback: legacy public feed (names + picks, no points)
         try {
           const res2 = await axios.get(
             `${import.meta.env.VITE_BACKEND_URL}/picks/week/${week}/public${
@@ -231,6 +235,7 @@ export default function WeeklyLeaderboard() {
                 x.potw_prediction ?? x.potw_guess ?? x.potw ?? null,
             })
           );
+          // with legacy, we don't have points; keep factor=1
           setWeekly({
             week,
             factor: 1,
@@ -279,7 +284,7 @@ export default function WeeklyLeaderboard() {
     })();
   }, [week, weekly.unlock_at_iso]);
 
-  // 4) Locking logic — KEEP names-only when locked; show full data when unlocked.
+  // 4) Locking logic
   const unlockISO = weekly.unlock_at_iso || computedUnlockISO || null;
   const now = new Date();
   const shouldBeLocked =
@@ -293,15 +298,79 @@ export default function WeeklyLeaderboard() {
     ? new Date(unlockISO).toLocaleString()
     : "Sunday 10:00 AM (Arizona)";
 
-  // Sort rows
+  // 5) When UNLOCKED, fetch public picks and merge into leaderboard rows
+  useEffect(() => {
+    if (week == null) return;
+    if (shouldBeLocked) return; // nothing to fetch/merge while locked
+
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await axios.get(
+          `${import.meta.env.VITE_BACKEND_URL}/picks/week/${week}/public${
+            window.location.search || ""
+          }`
+        );
+        const p = res.data || { picks: [] };
+        const map = new Map();
+        (p.picks || []).forEach((x) => {
+          const n = normalizeRow({
+            ...x,
+            team: x.team ?? x.pick_team ?? null,
+            gotw_prediction:
+              x.gotw_prediction ?? x.gotw_guess ?? x.gotw ?? null,
+            potw_prediction:
+              x.potw_prediction ?? x.potw_guess ?? x.potw ?? null,
+          });
+          if (x.user_id != null) map.set(Number(x.user_id), n);
+        });
+        if (!cancelled) setPicksByUser(map);
+      } catch {
+        if (!cancelled) setPicksByUser(null);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [week, shouldBeLocked]);
+
+  // 6) Merge picks into weekly rows when unlocked
+  const mergedRows = useMemo(() => {
+    if (shouldBeLocked) return weekly.rows || [];
+
+    const rows = [...(weekly.rows || [])].map((r) => ({ ...r }));
+    if (!picksByUser || picksByUser.size === 0) return rows;
+
+    for (let i = 0; i < rows.length; i++) {
+      const r = rows[i];
+      const u = Number(r.user_id ?? -1);
+      const pick = picksByUser.get(u);
+      if (!pick) continue;
+
+      // Only fill if missing in leaderboard payload
+      if (r.team == null && pick.team != null) r.team = pick.team;
+      if (r.gotw_prediction == null && pick.gotw_prediction != null)
+        r.gotw_prediction = pick.gotw_prediction;
+      if (r.potw_prediction == null && pick.potw_prediction != null)
+        r.potw_prediction = pick.potw_prediction;
+
+      // If backend didn’t flag favorite/correct, but picks included them:
+      if (typeof r.is_favorite !== "boolean" && typeof pick.is_favorite === "boolean")
+        r.is_favorite = pick.is_favorite;
+      if (typeof r.is_correct_pick !== "boolean" && typeof pick.is_correct_pick === "boolean")
+        r.is_correct_pick = pick.is_correct_pick;
+    }
+    return rows;
+  }, [weekly.rows, picksByUser, shouldBeLocked]);
+
+  // Sort rows (names-only vs full unlocked)
   const rows = useMemo(() => {
-    const arr = [...(weekly.rows || [])];
+    const arr = [...mergedRows];
     if (shouldBeLocked) {
-      // Names only; alphabetical by derived display name
       arr.sort((a, b) => displayNameOf(a).localeCompare(displayNameOf(b)));
       return arr;
     }
-    // Full unlocked sort
     arr.sort((a, b) => {
       const aWin = !!a.is_weekly_winner;
       const bWin = !!b.is_weekly_winner;
@@ -314,7 +383,7 @@ export default function WeeklyLeaderboard() {
       return displayNameOf(a).localeCompare(displayNameOf(b));
     });
     return arr;
-  }, [weekly.rows, shouldBeLocked]);
+  }, [mergedRows, shouldBeLocked]);
 
   if (loading) return <div className="p-6">Loading weekly leaderboard…</div>;
   if (err) return <div className="p-6 text-red-600">{err}</div>;
@@ -325,8 +394,6 @@ export default function WeeklyLeaderboard() {
 
       <div className="flex items-center justify-between mb-3">
         <h2 className="text-2xl font-bold">Week {week} Leaderboard</h2>
-
-        {/* Show double-points badge even when locked */}
         {weekly.factor > 1 && (
           <span className="inline-flex items-center gap-2 text-sm px-3 py-1 rounded bg-purple-100 text-purple-800 border border-purple-200">
             🔥 Double Points (×{weekly.factor})
@@ -337,7 +404,7 @@ export default function WeeklyLeaderboard() {
       {shouldBeLocked && (
         <div className="mb-4 p-3 rounded border border-yellow-300 bg-yellow-50 text-yellow-900">
           Public picks are hidden to prevent spoilers.{" "}
-          <strong>Picks unlock at {unlockText}.</strong>
+          <strong>Picks unlock at {unlockISO ? new Date(unlockISO).toLocaleString() : "Sunday 10:00 AM (Arizona)"}.</strong>
           <div className="text-sm text-yellow-800 mt-1">
             You can see who’s participating below. Team/GOTW/POTW selections and points will appear at unlock.
           </div>
