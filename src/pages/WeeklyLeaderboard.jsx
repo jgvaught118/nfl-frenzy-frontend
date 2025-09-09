@@ -32,17 +32,17 @@ function parseKickoff(g) {
   return isNaN(d.getTime()) ? null : d;
 }
 
-/** Find earliest Sunday kickoff (UTC Sunday) for a given array of games */
+/** Find earliest Sunday kickoff (UTC day 0) for a given array of games */
 function earliestSundayISO(games = []) {
   const sundays = games
     .map(parseKickoff)
     .filter(Boolean)
-    .filter((d) => d.getUTCDay() === 0) // Sunday in UTC
+    .filter((d) => d.getUTCDay() === 0) // Sunday
     .sort((a, b) => a - b);
   return sundays[0]?.toISOString() || null;
 }
 
-/** Safe display name */
+/** Safer name helper so locked view never shows “Player 1/2…” unless truly unknown */
 function displayNameOf(p, fallbackIndex = 0) {
   return (
     p.display_name ||
@@ -54,55 +54,99 @@ function displayNameOf(p, fallbackIndex = 0) {
   );
 }
 
-/** Merge leaderboard score rows with public picks by user_id */
-function mergeRows(scoreRows = [], picks = [], podium = [], potwExactList = []) {
-  const picksByUser = new Map();
-  picks.forEach((p) => {
-    if (p && p.user_id != null) picksByUser.set(Number(p.user_id), p);
-  });
+/** Normalize one leaderboard row from any backend shape to a unified shape the UI expects */
+function normalizeRow(r = {}) {
+  // team (several possible keys)
+  const team =
+    r.team ??
+    r.pick_team ??
+    r.selected_team ??
+    r.selection ??
+    r.team_pick ??
+    null;
 
-  const podiumByUser = new Map();
-  podium.forEach(({ user_id, award }) => {
-    // backend uses 3=1st, 2=2nd, 1=3rd
-    const rank = award === 3 ? 1 : award === 2 ? 2 : award === 1 ? 3 : null;
-    podiumByUser.set(Number(user_id), rank);
-  });
+  // favorite/underdog flags
+  const is_favorite =
+    r.is_favorite ??
+    (typeof r.favorite === "boolean" ? r.favorite : null);
 
-  const potwExactSet = new Set(
-    (potwExactList || []).map((u) => Number(u?.user_id ?? u))
-  );
+  // correctness of the pick
+  const is_correct_pick =
+    r.is_correct_pick ??
+    (typeof r.correct === "boolean" ? r.correct : null);
 
-  return (scoreRows || []).map((s) => {
-    const uid = Number(s.user_id);
-    const p = picksByUser.get(uid);
+  // GOTW & POTW predictions (allow strings, coerce to number where appropriate)
+  const gotw_prediction =
+    r.gotw_prediction ??
+    r.gotw_guess ??
+    r.gotw_pick ??
+    r.gotw ??
+    null;
 
-    return {
-      user_id: uid,
-      display_name: s.name || p?.first_name || p?.name || "—",
+  const potw_prediction =
+    r.potw_prediction ??
+    r.potw_guess ??
+    r.potw_pick ??
+    r.potw ??
+    null;
 
-      // Picks (only present after unlock)
-      team: p?.team ?? null,
-      gotw_prediction: p?.gotw_prediction ?? null,
-      potw_prediction: p?.potw_prediction ?? null,
+  // ranks/badges/exact flags
+  const gotw_rank =
+    r.gotw_rank ??
+    r.gotw_place ??
+    (Number.isFinite(Number(r.gotw_points_rank))
+      ? Number(r.gotw_points_rank)
+      : null);
 
-      // Favorite/underdog & correctness (if backend provides on public endpoint)
-      is_favorite: p?.is_favorite ?? null,
-      is_correct_pick: p?.is_correct_pick ?? null,
+  const potw_exact =
+    r.potw_exact ??
+    (typeof r.is_potw_exact === "boolean" ? r.is_potw_exact : false);
 
-      // From scoring endpoint
-      base_points: Number.isFinite(Number(s.base_points)) ? Number(s.base_points) : null,
-      gotw_points: Number(s.gotw_points ?? 0),
-      potw_points: Number(s.potw_points ?? 0),
-      total_points: Number(s.total_points ?? 0),
+  // points
+  const base_points =
+    r.base_points ??
+    r.pick_points ??
+    (Number.isFinite(Number(r.points_base)) ? Number(r.points_base) : null);
 
-      // Badges
-      gotw_rank: podiumByUser.get(uid) ?? null,
-      potw_exact: potwExactSet.has(uid),
+  const bonus_points =
+    r.bonus_points ??
+    r.extra_points ??
+    (Number.isFinite(Number(r.points_bonus)) ? Number(r.points_bonus) : null);
 
-      // Winner highlight if backend ever flags it
-      is_weekly_winner: false,
-    };
-  });
+  const total_points =
+    r.total_points ??
+    (Number.isFinite(Number(r.points_total)) ? Number(r.points_total) : null);
+
+  // winner flag
+  const is_weekly_winner =
+    r.is_weekly_winner ??
+    r.winner ??
+    r.award === 3 /* from podium */ ??
+    false;
+
+  return {
+    ...r,
+    team,
+    is_favorite,
+    is_correct_pick,
+    gotw_prediction:
+      gotw_prediction === "" || gotw_prediction == null
+        ? null
+        : gotw_prediction,
+    potw_prediction:
+      potw_prediction === "" || potw_prediction == null
+        ? null
+        : potw_prediction,
+    gotw_rank: Number.isFinite(Number(gotw_rank)) ? Number(gotw_rank) : null,
+    potw_exact: !!potw_exact,
+    base_points:
+      Number.isFinite(Number(base_points)) ? Number(base_points) : null,
+    bonus_points:
+      Number.isFinite(Number(bonus_points)) ? Number(bonus_points) : null,
+    total_points:
+      Number.isFinite(Number(total_points)) ? Number(total_points) : null,
+    is_weekly_winner: !!is_weekly_winner,
+  };
 }
 
 export default function WeeklyLeaderboard() {
@@ -113,18 +157,18 @@ export default function WeeklyLeaderboard() {
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState("");
 
-  const [state, setState] = useState({
+  const [weekly, setWeekly] = useState({
     week: null,
     factor: 1,
-    lockedFromAPI: false,
-    unlock_at_iso: null, // authoritative if provided by backend
+    locked: false,
+    unlock_at_iso: null,
     qa_mode: false,
-    gotw_actual: null,
-    potw_actual: null,
+    gotw: { actual_total: null },
+    potw: { actual_yards: null },
     rows: [],
   });
 
-  const [fallbackUnlockISO, setFallbackUnlockISO] = useState(null);
+  const [computedUnlockISO, setComputedUnlockISO] = useState(null);
 
   // 1) Normalize week param (redirect to current if invalid)
   useEffect(() => {
@@ -143,7 +187,8 @@ export default function WeeklyLeaderboard() {
           `${import.meta.env.VITE_BACKEND_URL}/admin/current_week`
         );
         const payload = res.data || {};
-        const cw = payload.current_week ?? payload;
+        const cw =
+          payload.current_week !== undefined ? payload.current_week : payload;
         const wk = (typeof cw === "object" ? cw.week_number || cw.week : cw) || 1;
         const n2 = Number(wk) || 1;
         setWeek(n2);
@@ -157,152 +202,144 @@ export default function WeeklyLeaderboard() {
     })();
   }, [weekParam, navigate]);
 
-  // 2) Load leaderboard + public picks, then merge
+  // 2) Load weekly scores (new endpoint, fallback to legacy)
   useEffect(() => {
     if (week == null) return;
 
-    let alive = true;
-    (async () => {
+    const load = async () => {
+      setLoading(true);
+      setErr("");
+      setComputedUnlockISO(null);
+
       try {
-        setLoading(true);
-        setErr("");
-        setFallbackUnlockISO(null);
-
-        const qs = window.location.search || "";
-
-        // Scores endpoint
-        const scoreRes = await axios.get(
-          `${import.meta.env.VITE_BACKEND_URL}/leaderboard/week/${week}${qs}`
+        const res = await axios.get(
+          `${import.meta.env.VITE_BACKEND_URL}/leaderboard/week/${week}${
+            window.location.search || ""
+          }`
         );
-        const scores = scoreRes.data || {};
-
-        // Public picks endpoint (drives lock/unlock + provides pick fields)
-        const picksRes = await axios.get(
-          `${import.meta.env.VITE_BACKEND_URL}/picks/week/${week}/public${qs}`
-        );
-        const picksPayload = picksRes.data || { locked: true, picks: [] };
-
-        // Merge rows by user_id
-        const mergedRows = mergeRows(
-          scores.rows || scores.data || [],
-          picksPayload.picks || [],
-          scores.podium || [],
-          scores.potw_exact || []
-        );
-
-        if (!alive) return;
-        setState({
-          week: Number(scores.week ?? week),
-          factor: Number(scores.factor ?? 1) || 1,
-          lockedFromAPI: !!picksPayload.locked,
-          unlock_at_iso: picksPayload.unlock_at_iso || scores.unlock_at_iso || null,
-          qa_mode: !!picksPayload.qa_mode,
-          gotw_actual: scores.gotw_actual ?? null,
-          potw_actual: scores.potw_actual ?? null,
-          rows: mergedRows,
+        const d = res.data || {};
+        const rows = Array.isArray(d.rows) ? d.rows.map(normalizeRow) : [];
+        setWeekly({
+          week: Number(d.week ?? week),
+          factor: Number(d.factor ?? 1) || 1,
+          locked: !!d.locked,
+          unlock_at_iso: d.unlock_at_iso || null,
+          qa_mode: !!d.qa_mode,
+          gotw: d.gotw || { actual_total: null },
+          potw: d.potw || { actual_yards: null },
+          rows,
         });
-
-        // Fallback unlock time if backend didn't send one:
-        if (!picksPayload.unlock_at_iso && !scores.unlock_at_iso) {
-          // Compute earliest Sunday kickoff as a proxy for 10:00 a.m. Arizona
-          try {
-            const gamesRes = await axios.get(
-              `${import.meta.env.VITE_BACKEND_URL}/games/week/${week}`
+      } catch (e1) {
+        // Fallback: legacy public feed
+        try {
+          const res2 = await axios.get(
+            `${import.meta.env.VITE_BACKEND_URL}/picks/week/${week}/public${
+              window.location.search || ""
+            }`
+          );
+          const p = res2.data || { picks: [] };
+          const rows = (p.picks || [])
+            .map((x) =>
+              normalizeRow({
+                ...x,
+                // help older payloads
+                team: x.team ?? x.pick_team ?? null,
+                gotw_prediction:
+                  x.gotw_prediction ?? x.gotw_guess ?? x.gotw ?? null,
+                potw_prediction:
+                  x.potw_prediction ?? x.potw_guess ?? x.potw ?? null,
+              })
             );
-            const unlock = earliestSundayISO(Array.isArray(gamesRes.data) ? gamesRes.data : []);
-            if (alive) setFallbackUnlockISO(unlock); // may remain null
-          } catch {
-            if (alive) setFallbackUnlockISO(null);
-          }
+          setWeekly({
+            week,
+            factor: 1,
+            locked: !!p.locked,
+            unlock_at_iso: p.unlock_at_iso || null,
+            qa_mode: !!p.qa_mode,
+            gotw: { actual_total: null },
+            potw: { actual_yards: null },
+            rows,
+          });
+        } catch (e2) {
+          console.error(e2);
+          setErr(
+            e2.response?.data?.error ||
+              e1.response?.data?.error ||
+              "Failed to load weekly leaderboard"
+          );
         }
-      } catch (e) {
-        console.error(e);
-        if (!alive) return;
-        setErr(e.response?.data?.error || "Failed to load weekly leaderboard");
       } finally {
-        if (alive) setLoading(false);
+        setLoading(false);
       }
-    })();
-
-    return () => {
-      alive = false;
     };
+
+    load();
   }, [week]);
 
-  // 3) Lock logic (10:00 a.m. AZ) with QA override
-  const { isLocked, unlockISO, unlockText } = useMemo(() => {
-    const params = new URLSearchParams(window.location.search || "");
-    const debugUnlocked = params.get("debug_unlocked") === "1";
-
-    // If QA override present => never lock
-    if (debugUnlocked) {
-      return { isLocked: false, unlockISO: null, unlockText: "" };
+  // 3) If unlock_at_iso is missing, compute earliest Sunday kickoff for THIS week
+  useEffect(() => {
+    if (week == null) return;
+    if (weekly.unlock_at_iso) {
+      setComputedUnlockISO(null);
+      return;
     }
-
-    // Choose unlock instant (backend first, else fallback to earliest Sunday kickoff)
-    const unlockISO_ = state.unlock_at_iso || fallbackUnlockISO || null;
-
-    // If API explicitly says "locked", respect it until unlock instant passes (if we have one)
-    if (state.lockedFromAPI) {
-      if (!unlockISO_) {
-        return {
-          isLocked: true,
-          unlockISO: null,
-          unlockText: "Sunday 10:00 AM (Arizona)",
-        };
+    (async () => {
+      try {
+        const res = await axios.get(
+          `${import.meta.env.VITE_BACKEND_URL}/games/week/${week}`
+        );
+        const unlock = earliestSundayISO(Array.isArray(res.data) ? res.data : []);
+        setComputedUnlockISO(unlock); // null if no Sunday games
+      } catch {
+        setComputedUnlockISO(null);
       }
-      const now = Date.now();
-      const ts = new Date(unlockISO_).getTime();
-      const stillLocked = isFinite(ts) ? now < ts : true;
-      return {
-        isLocked: stillLocked,
-        unlockISO: unlockISO_,
-        unlockText: new Date(unlockISO_).toLocaleString(),
-      };
-    }
+    })();
+  }, [week, weekly.unlock_at_iso]);
 
-    // If API says not locked, we still gate by unlock time when present
-    if (state.lockedFromAPI === false && unlockISO_) {
-      const now = Date.now();
-      const ts = new Date(unlockISO_).getTime();
-      const stillLocked = isFinite(ts) ? now < ts : false;
-      return {
-        isLocked: stillLocked,
-        unlockISO: unlockISO_,
-        unlockText: new Date(unlockISO_).toLocaleString(),
-      };
-    }
+  // 4) Locked detection — only consider whether picks are hidden
+  const lockedUI = useMemo(() => {
+    if (weekly.locked) return true;
+    const rows = weekly.rows || [];
+    if (!rows.length) return true;
+    const anyPickVisible = rows.some(
+      (r) =>
+        r.team != null ||
+        r.gotw_prediction != null ||
+        r.potw_prediction != null
+    );
+    return !anyPickVisible;
+  }, [weekly.locked, weekly.rows]);
 
-    // No lock indicated and no unlock time => unlocked
-    return { isLocked: false, unlockISO: null, unlockText: "" };
-  }, [state.lockedFromAPI, state.unlock_at_iso, fallbackUnlockISO]);
+  // Unlock time string
+  const unlockISO = weekly.unlock_at_iso || computedUnlockISO || null;
+  const unlockText = unlockISO
+    ? new Date(unlockISO).toLocaleString()
+    : "Sunday 11:00 AM (Arizona)";
 
   // Sort rows
   const rows = useMemo(() => {
-    const arr = [...(state.rows || [])];
-    if (isLocked) {
-      // Names only; sort alphabetically for locked view
-      arr.sort((a, b) => displayNameOf(a).localeCompare(displayNameOf(b)));
+    const arr = [...(weekly.rows || [])];
+    if (lockedUI) {
+      // Names only; alphabetical by derived display name
+      arr.sort((a, b) =>
+        displayNameOf(a).localeCompare(displayNameOf(b))
+      );
       return arr;
     }
-    // Unlocked sort: total desc, then podium/Exact, then name
+    // Full unlocked sort
     arr.sort((a, b) => {
+      const aWin = !!a.is_weekly_winner;
+      const bWin = !!b.is_weekly_winner;
+      if (aWin !== bWin) return bWin - aWin;
+
       const tpA = Number(a.total_points ?? 0);
       const tpB = Number(b.total_points ?? 0);
       if (tpB !== tpA) return tpB - tpA;
 
-      const rA = Number(a.gotw_rank ?? 99);
-      const rB = Number(b.gotw_rank ?? 99);
-      if (rA !== rB) return rA - rB;
-
-      if (!!b.potw_exact !== !!a.potw_exact) {
-        return (b.potw_exact ? 1 : 0) - (a.potw_exact ? 1 : 0);
-      }
-
       return displayNameOf(a).localeCompare(displayNameOf(b));
     });
     return arr;
-  }, [state.rows, isLocked]);
+  }, [weekly.rows, lockedUI]);
 
   if (loading) return <div className="p-6">Loading weekly leaderboard…</div>;
   if (err) return <div className="p-6 text-red-600">{err}</div>;
@@ -313,20 +350,19 @@ export default function WeeklyLeaderboard() {
 
       <div className="flex items-center justify-between mb-3">
         <h2 className="text-2xl font-bold">Week {week} Leaderboard</h2>
-        {state.factor > 1 && (
+
+        {/* Always show double-points badge if factor > 1 (even when locked) */}
+        {weekly.factor > 1 && (
           <span className="inline-flex items-center gap-2 text-sm px-3 py-1 rounded bg-purple-100 text-purple-800 border border-purple-200">
-            🔥 Double Points (×{state.factor})
+            🔥 Double Points (×{weekly.factor})
           </span>
         )}
       </div>
 
-      {isLocked && (
+      {lockedUI && (
         <div className="mb-4 p-3 rounded border border-yellow-300 bg-yellow-50 text-yellow-900">
           Public picks are hidden to prevent spoilers.{" "}
-          <strong>
-            Picks unlock at{" "}
-            {unlockISO ? unlockText : "Sunday 10:00 AM (Arizona)"}.
-          </strong>
+          <strong>Picks unlock at {unlockText}.</strong>
           <div className="text-sm text-yellow-800 mt-1">
             You can see who’s participating below. Team/GOTW/POTW selections and points will appear at unlock.
           </div>
@@ -334,7 +370,7 @@ export default function WeeklyLeaderboard() {
       )}
 
       {/* Locked view: names only */}
-      {isLocked ? (
+      {lockedUI ? (
         <div className="overflow-x-auto">
           <table className="min-w-full border rounded">
             <thead className="bg-gray-100">
@@ -362,7 +398,7 @@ export default function WeeklyLeaderboard() {
               )}
             </tbody>
           </table>
-          {state.qa_mode && (
+          {weekly.qa_mode && (
             <div className="mt-3 text-xs text-gray-500">QA Mode is ON</div>
           )}
         </div>
@@ -378,8 +414,7 @@ export default function WeeklyLeaderboard() {
                 <th className="text-left px-3 py-2 border-b">GOTW Pick</th>
                 <th className="text-left px-3 py-2 border-b">POTW Pick</th>
                 <th className="text-left px-3 py-2 border-b">Base</th>
-                <th className="text-left px-3 py-2 border-b">GOTW</th>
-                <th className="text-left px-3 py-2 border-b">POTW</th>
+                <th className="text-left px-3 py-2 border-b">Bonus</th>
                 <th className="text-left px-3 py-2 border-b">Total</th>
               </tr>
             </thead>
@@ -389,12 +424,15 @@ export default function WeeklyLeaderboard() {
                   rowClasses(p, false) +
                   (p.is_weekly_winner ? " font-semibold" : "");
                 const showBase = Number.isFinite(Number(p.base_points));
+                const showBonus = Number.isFinite(Number(p.bonus_points));
                 return (
                   <tr key={`${displayNameOf(p, idx)}-${idx}`} className={classes}>
                     <td className="px-3 py-2 border-b align-top">
                       {idx + 1}
                       {p.is_weekly_winner && (
-                        <span className={`ml-2 text-xs px-2 py-0.5 rounded ${badgeClass.winner}`}>
+                        <span
+                          className={`ml-2 text-xs px-2 py-0.5 rounded ${badgeClass.winner}`}
+                        >
                           ⭐ Winner
                         </span>
                       )}
@@ -408,13 +446,21 @@ export default function WeeklyLeaderboard() {
                       <div className="flex items-center gap-2">
                         <span>{p.team || "—"}</span>
                         {p.is_favorite === true && (
-                          <span className="text-xs rounded bg-yellow-200 px-1">Favorite</span>
+                          <span className="text-xs rounded bg-yellow-200 px-1">
+                            Favorite
+                          </span>
                         )}
                         {p.is_favorite === false && (
-                          <span className="text-xs rounded bg-green-200 px-1">Underdog</span>
+                          <span className="text-xs rounded bg-green-200 px-1">
+                            Underdog
+                          </span>
                         )}
-                        {p.is_correct_pick === true && <span className="text-xs">✔️</span>}
-                        {p.is_correct_pick === false && <span className="text-xs">❌</span>}
+                        {p.is_correct_pick === true && (
+                          <span className="text-xs">✔️</span>
+                        )}
+                        {p.is_correct_pick === false && (
+                          <span className="text-xs">❌</span>
+                        )}
                       </div>
                     </td>
 
@@ -422,17 +468,23 @@ export default function WeeklyLeaderboard() {
                       <div className="flex items-center gap-2">
                         <span>{p.gotw_prediction ?? "—"}</span>
                         {p.gotw_rank === 1 && (
-                          <span className={`text-xs px-2 py-0.5 rounded ${badgeClass.gotw1}`}>
+                          <span
+                            className={`text-xs px-2 py-0.5 rounded ${badgeClass.gotw1}`}
+                          >
                             GOTW 1st
                           </span>
                         )}
                         {p.gotw_rank === 2 && (
-                          <span className={`text-xs px-2 py-0.5 rounded ${badgeClass.gotw2}`}>
+                          <span
+                            className={`text-xs px-2 py-0.5 rounded ${badgeClass.gotw2}`}
+                          >
                             GOTW 2nd
                           </span>
                         )}
                         {p.gotw_rank === 3 && (
-                          <span className={`text-xs px-2 py-0.5 rounded ${badgeClass.gotw3}`}>
+                          <span
+                            className={`text-xs px-2 py-0.5 rounded ${badgeClass.gotw3}`}
+                          >
                             GOTW 3rd
                           </span>
                         )}
@@ -443,7 +495,9 @@ export default function WeeklyLeaderboard() {
                       <div className="flex items-center gap-2">
                         <span>{p.potw_prediction ?? "—"}</span>
                         {p.potw_exact && (
-                          <span className={`text-xs px-2 py-0.5 rounded ${badgeClass.potwExact}`}>
+                          <span
+                            className={`text-xs px-2 py-0.5 rounded ${badgeClass.potwExact}`}
+                          >
                             Exact
                           </span>
                         )}
@@ -454,11 +508,9 @@ export default function WeeklyLeaderboard() {
                       {showBase ? Number(p.base_points) : "—"}
                     </td>
                     <td className="px-3 py-2 border-b align-top">
-                      {Number(p.gotw_points ?? 0)}
+                      {showBonus ? Number(p.bonus_points) : "—"}
                     </td>
-                    <td className="px-3 py-2 border-b align-top">
-                      {Number(p.potw_points ?? 0)}
-                    </td>
+
                     <td className="px-3 py-2 border-b align-top">
                       <span className="inline-block min-w-8 text-center font-bold">
                         {Number(p.total_points ?? 0)}
@@ -467,10 +519,9 @@ export default function WeeklyLeaderboard() {
                   </tr>
                 );
               })}
-
               {rows.length === 0 && (
                 <tr>
-                  <td colSpan={9} className="px-3 py-6 text-center text-gray-500">
+                  <td colSpan={8} className="px-3 py-6 text-center text-gray-500">
                     No public picks to show yet.
                   </td>
                 </tr>
@@ -478,7 +529,7 @@ export default function WeeklyLeaderboard() {
             </tbody>
           </table>
 
-          {state.qa_mode && (
+          {weekly.qa_mode && (
             <div className="mt-3 text-xs text-gray-500">QA Mode is ON</div>
           )}
         </div>
