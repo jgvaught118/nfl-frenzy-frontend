@@ -6,7 +6,22 @@ import { useAuth } from "../context/AuthContext";
 
 const TOTAL_WEEKS = 18;
 
-/** Inline Highlights panel (so you don't need a separate file) */
+/** Arizona time formatter (display only, does NOT affect locking logic) */
+const azFormatter = new Intl.DateTimeFormat("en-US", {
+  timeZone: "America/Phoenix",
+  month: "short",
+  day: "numeric",
+  hour: "numeric",
+  minute: "2-digit",
+  hour12: true,
+});
+
+function formatAzTime(date) {
+  if (!date) return "";
+  return azFormatter.format(date);
+}
+
+/** Inline Highlights panel */
 function HighlightsPanel({ week, className = "" }) {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -65,7 +80,7 @@ function HighlightsPanel({ week, className = "" }) {
             </div>
             {gotw.start_time && (
               <div className="text-sm text-gray-600 mt-1">
-                Kickoff: {new Date(gotw.start_time).toLocaleString()}
+                Kickoff: {formatAzTime(new Date(gotw.start_time))} (AZ)
               </div>
             )}
             <div className="text-sm text-gray-700 mt-3">
@@ -113,13 +128,12 @@ export default function PicksForm() {
   const [potwPrediction, setPotwPrediction] = useState("");
   const [gotwPrediction, setGotwPrediction] = useState("");
 
-  // highlights context
   const [gotwContext, setGotwContext] = useState(null);
   const [potwContext, setPotwContext] = useState(null);
 
   const [loading, setLoading] = useState(true);
 
-  // locking
+  // locking (unchanged behavior)
   const [globalLocked, setGlobalLocked] = useState(false);         // first Sunday kickoff lock
   const [lockedGames, setLockedGames] = useState([]);              // [game.id, ...] already kicked off
   const [countdown, setCountdown] = useState("");                  // live countdown text
@@ -164,10 +178,11 @@ export default function PicksForm() {
     countdownTimerRef.current = setInterval(tick, 1000);
   };
 
+  // NOTE: This is your EXISTING global lock rule; unchanged.
   const computeFirstSundayKickoff = (gamesList) => {
     const sundays = gamesList
       .map(kickoffDate)
-      .filter((d) => d && d.getUTCDay() === 0) // 0 = Sunday
+      .filter((d) => d && d.getUTCDay() === 0) // 0 = Sunday (UTC-based as before)
       .sort((a, b) => a - b);
     return sundays[0] || null;
   };
@@ -233,7 +248,7 @@ export default function PicksForm() {
           .map(({ id }) => id);
         setLockedGames(alreadyLockedIds);
 
-        // 5) Global lock (first Sunday kickoff)
+        // 5) Global lock (first Sunday kickoff) — unchanged logic
         const firstSunday = computeFirstSundayKickoff(gamesData);
         if (firstSunday) {
           if (now >= firstSunday) {
@@ -369,7 +384,7 @@ export default function PicksForm() {
         </select>
       </div>
 
-      {/* NEW: Highlights (GOTW & POTW) */}
+      {/* Highlights (GOTW & POTW) */}
       <HighlightsPanel week={week} className="mb-6" />
 
       {!!countdown && (
@@ -415,7 +430,7 @@ export default function PicksForm() {
                   {game.home_team} vs {game.away_team}
                 </h3>
                 <div className="text-sm text-gray-600">
-                  {k ? `${k.toLocaleString()} (local)` : "Kickoff: TBA"}
+                  {k ? `${formatAzTime(k)} (AZ)` : "Kickoff: TBA"}
                 </div>
               </div>
 
@@ -464,7 +479,9 @@ export default function PicksForm() {
                       <span className="flex items-center gap-2">
                         <span>{team}</span>
                         {isFavorite === true && <span aria-hidden>⭐</span>}
-                        {alreadyUsed && <span className="text-xs bg-gray-200 px-1 rounded">Used</span>}
+                        {alreadyUsed && (
+                          <span className="text-xs bg-gray-200 px-1 rounded">Used</span>
+                        )}
                         {selected && <span aria-hidden>✔️</span>}
                       </span>
                     </label>
@@ -481,7 +498,7 @@ export default function PicksForm() {
           );
         })}
 
-        {/* GOTW / POTW inputs (now with live context) */}
+        {/* GOTW / POTW inputs */}
         <div className="grid grid-cols-1 gap-4">
           <div>
             <label className="block mb-1 font-medium">
