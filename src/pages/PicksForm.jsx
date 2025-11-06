@@ -1,65 +1,72 @@
 // src/pages/PicksForm.jsx
-import React, { useEffect, useMemo, useRef, useState } from "react";
+
+import React, {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import axios from "axios";
 import { useNavigate, useParams } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
 
 const TOTAL_WEEKS = 18;
 
-/** Arizona time formatter (display only, does NOT affect locking logic) */
-const azFormatter = new Intl.DateTimeFormat("en-US", {
-  timeZone: "America/Phoenix",
-  month: "short",
-  day: "numeric",
-  hour: "numeric",
-  minute: "2-digit",
-  hour12: true,
-});
-
-function formatAzTime(date) {
-  if (!date) return "";
-  return azFormatter.format(date);
-}
-
-/** Inline Highlights panel */
+/**
+ * Highlights Panel (Game of the Week / Player of the Week)
+ */
 function HighlightsPanel({ week, className = "" }) {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState("");
 
   useEffect(() => {
-    let done = false;
+    let cancelled = false;
+
     async function run() {
       try {
         setLoading(true);
         setErr("");
+
         const url = `${import.meta.env.VITE_BACKEND_URL}/games/highlights/${week}`;
         const res = await axios.get(url);
-        if (!done) setData(res.data?.data || null);
+        if (!cancelled) {
+          setData(res.data?.data || null);
+        }
       } catch (e) {
-        if (!done) setErr("Could not load highlights.");
+        if (!cancelled) setErr("Could not load highlights.");
       } finally {
-        if (!done) setLoading(false);
+        if (!cancelled) setLoading(false);
       }
     }
+
     run();
+
     return () => {
-      done = true;
+      cancelled = true;
     };
   }, [week]);
 
   if (loading) {
     return (
-      <div className={`rounded-xl border p-4 bg-white shadow-sm ${className}`}>
-        <div className="text-sm text-gray-500">Loading highlights…</div>
+      <div
+        className={`rounded-xl border p-4 bg-white shadow-sm ${className}`}
+      >
+        <div className="text-sm text-gray-500">
+          Loading highlights…
+        </div>
       </div>
     );
   }
 
   if (err || !data) {
     return (
-      <div className={`rounded-xl border p-4 bg-white shadow-sm ${className}`}>
-        <div className="text-sm text-red-600">{err || "No highlights available."}</div>
+      <div
+        className={`rounded-xl border p-4 bg-white shadow-sm ${className}`}
+      >
+        <div className="text-sm text-red-600">
+          {err || "No highlights available."}
+        </div>
       </div>
     );
   }
@@ -67,8 +74,10 @@ function HighlightsPanel({ week, className = "" }) {
   const { gotw, potw } = data;
 
   return (
-    <div className={`grid gap-4 md:grid-cols-2 ${className}`}>
-      {/* GOTW */}
+    <div
+      className={`grid gap-4 md:grid-cols-2 ${className}`}
+    >
+      {/* Game of the Week */}
       <div className="rounded-xl border p-4 bg-white shadow-sm">
         <div className="text-xs font-semibold uppercase tracking-wide text-gray-500 mb-2">
           Game of the Week
@@ -80,19 +89,25 @@ function HighlightsPanel({ week, className = "" }) {
             </div>
             {gotw.start_time && (
               <div className="text-sm text-gray-600 mt-1">
-                Kickoff: {formatAzTime(new Date(gotw.start_time))} (AZ)
+                Kickoff:{" "}
+                {new Date(
+                  gotw.start_time
+                ).toLocaleString()}
               </div>
             )}
             <div className="text-sm text-gray-700 mt-3">
-              Enter your <b>total points</b> prediction for this matchup below.
+              Enter your <b>total points</b> prediction for
+              this matchup below.
             </div>
           </>
         ) : (
-          <div className="text-sm text-gray-500">No GOTW set for week {week}.</div>
+          <div className="text-sm text-gray-500">
+            No GOTW set for week {week}.
+          </div>
         )}
       </div>
 
-      {/* POTW */}
+      {/* Player of the Week */}
       <div className="rounded-xl border p-4 bg-white shadow-sm">
         <div className="text-xs font-semibold uppercase tracking-wide text-gray-500 mb-2">
           Player of the Week
@@ -101,14 +116,22 @@ function HighlightsPanel({ week, className = "" }) {
           <>
             <div className="text-lg font-semibold text-gray-900">
               {potw.player}
-              {potw.team ? <span className="text-gray-600 font-normal"> — {potw.team}</span> : null}
+              {potw.team && (
+                <span className="text-gray-600 font-normal">
+                  {" "}
+                  — {potw.team}
+                </span>
+              )}
             </div>
             <div className="text-sm text-gray-700 mt-3">
-              Enter your <b>total yards</b> prediction for this player below.
+              Enter your <b>total yards</b> prediction for
+              this player below.
             </div>
           </>
         ) : (
-          <div className="text-sm text-gray-500">No POTW set for week {week}.</div>
+          <div className="text-sm text-gray-500">
+            No POTW set for week {week}.
+          </div>
         )}
       </div>
     </div>
@@ -122,9 +145,11 @@ export default function PicksForm() {
   const week = Number(weekParam || 1);
 
   const [games, setGames] = useState([]);
-  const [pickedTeams, setPickedTeams] = useState([]);              // teams user already used this season
+  const [pickedTeams, setPickedTeams] = useState([]); // all teams used this season
   const [selectedTeam, setSelectedTeam] = useState("");
-  const [existingPickTeam, setExistingPickTeam] = useState("");    // team already submitted for this week (if any)
+  const [existingPickTeam, setExistingPickTeam] =
+    useState(""); // already submitted for this week (if any)
+
   const [potwPrediction, setPotwPrediction] = useState("");
   const [gotwPrediction, setGotwPrediction] = useState("");
 
@@ -133,20 +158,25 @@ export default function PicksForm() {
 
   const [loading, setLoading] = useState(true);
 
-  // locking (unchanged behavior)
-  const [globalLocked, setGlobalLocked] = useState(false);         // first Sunday kickoff lock
-  const [lockedGames, setLockedGames] = useState([]);              // [game.id, ...] already kicked off
-  const [countdown, setCountdown] = useState("");                  // live countdown text
+  // locking
+  const [globalLocked, setGlobalLocked] = useState(false);
+  const [lockedGames, setLockedGames] = useState([]); // ids
+  const [countdown, setCountdown] = useState("");
   const countdownTimerRef = useRef(null);
 
   const axiosConfig = useMemo(
     () => ({
-      headers: { Authorization: `Bearer ${localStorage.getItem("token")}` },
+      headers: {
+        Authorization: `Bearer ${localStorage.getItem(
+          "token"
+        )}`,
+      },
     }),
     []
   );
 
   // ---------- helpers ----------
+
   const fmtTimeLeft = (msLeft) => {
     const sec = Math.max(0, Math.floor(msLeft / 1000));
     const h = Math.floor(sec / 3600);
@@ -156,43 +186,64 @@ export default function PicksForm() {
   };
 
   const kickoffDate = (g) => {
-    const val = g.kickoff ?? g.start_time ?? g.kickoff_time;
+    const val =
+      g.kickoff ?? g.start_time ?? g.kickoff_time;
     const d = new Date(val);
-    return isNaN(d.getTime()) ? null : d;
+    return Number.isNaN(d.getTime()) ? null : d;
   };
 
   const makeCountdown = (targetDate) => {
-    if (countdownTimerRef.current) clearInterval(countdownTimerRef.current);
+    if (countdownTimerRef.current) {
+      clearInterval(countdownTimerRef.current);
+    }
+
     const tick = () => {
       const now = new Date();
       const diff = targetDate - now;
+
       if (diff <= 0) {
         setGlobalLocked(true);
         setCountdown("Picks are now locked!");
-        if (countdownTimerRef.current) clearInterval(countdownTimerRef.current);
+        if (countdownTimerRef.current) {
+          clearInterval(countdownTimerRef.current);
+        }
         return;
       }
-      setCountdown(`Time until first Sunday kickoff: ${fmtTimeLeft(diff)}`);
+
+      setCountdown(
+        `Time until first Sunday kickoff: ${fmtTimeLeft(
+          diff
+        )}`
+      );
     };
+
     tick();
-    countdownTimerRef.current = setInterval(tick, 1000);
+    countdownTimerRef.current = setInterval(
+      tick,
+      1000
+    );
   };
 
-  // NOTE: This is your EXISTING global lock rule; unchanged.
   const computeFirstSundayKickoff = (gamesList) => {
     const sundays = gamesList
       .map(kickoffDate)
-      .filter((d) => d && d.getUTCDay() === 0) // 0 = Sunday (UTC-based as before)
+      .filter(
+        (d) => d && d.getUTCDay() === 0 // Sunday in UTC
+      )
       .sort((a, b) => a - b);
+
     return sundays[0] || null;
   };
 
-  // ---------- fetch on mount / when week changes ----------
+  // ---------- fetch on mount / week change ----------
+
   useEffect(() => {
     if (!user) {
       navigate("/login");
       return;
     }
+
+    let cancelled = false;
 
     const run = async () => {
       try {
@@ -203,35 +254,65 @@ export default function PicksForm() {
           `${import.meta.env.VITE_BACKEND_URL}/games/week/${week}`,
           axiosConfig
         );
-        const gamesData = Array.isArray(gamesRes.data) ? gamesRes.data : [];
+        const gamesData = Array.isArray(
+          gamesRes.data
+        )
+          ? gamesRes.data
+          : [];
+        if (cancelled) return;
         setGames(gamesData);
 
         // 2) All teams user has used (season)
         const seasonRes = await axios.get(
           `${import.meta.env.VITE_BACKEND_URL}/picks/season/private`,
-          { params: { user_id: user.id }, ...axiosConfig }
+          {
+            params: { user_id: user.id },
+            ...axiosConfig,
+          }
         );
-        const alreadyUsed = (seasonRes.data || []).map((p) => p.team);
+        if (cancelled) return;
+        const alreadyUsed = (seasonRes.data || []).map(
+          (p) => p.team
+        );
         setPickedTeams(alreadyUsed);
 
         // 3) Existing pick for this week (if any)
         const weekPickRes = await axios.get(
           `${import.meta.env.VITE_BACKEND_URL}/picks/week/${week}/private`,
-          { params: { user_id: user.id }, ...axiosConfig }
+          {
+            params: { user_id: user.id },
+            ...axiosConfig,
+          }
         );
-        const existing = (weekPickRes.data || [])[0];
+        if (cancelled) return;
+
+        const existing =
+          (weekPickRes.data || [])[0];
+
         if (existing) {
-          setExistingPickTeam(existing.team || "");
-          setSelectedTeam(existing.team || "");
+          setExistingPickTeam(
+            existing.team || ""
+          );
+          setSelectedTeam(
+            existing.team || ""
+          );
           setPotwPrediction(
-            existing.potw_prediction === null || typeof existing.potw_prediction === "undefined"
+            existing.potw_prediction === null ||
+            typeof existing.potw_prediction ===
+              "undefined"
               ? ""
-              : String(existing.potw_prediction)
+              : String(
+                  existing.potw_prediction
+                )
           );
           setGotwPrediction(
-            existing.gotw_prediction === null || typeof existing.gotw_prediction === "undefined"
+            existing.gotw_prediction === null ||
+            typeof existing.gotw_prediction ===
+              "undefined"
               ? ""
-              : String(existing.gotw_prediction)
+              : String(
+                  existing.gotw_prediction
+                )
           );
         } else {
           setExistingPickTeam("");
@@ -240,20 +321,30 @@ export default function PicksForm() {
           setGotwPrediction("");
         }
 
-        // 4) Per-game locks
+        // 4) Per-game locks (kickoff passed)
         const now = new Date();
         const alreadyLockedIds = gamesData
-          .map((g) => ({ id: g.id, d: kickoffDate(g) }))
-          .filter(({ d }) => d && d <= now)
+          .map((g) => ({
+            id: g.id,
+            d: kickoffDate(g),
+          }))
+          .filter(
+            ({ d }) => d && d <= now
+          )
           .map(({ id }) => id);
         setLockedGames(alreadyLockedIds);
 
-        // 5) Global lock (first Sunday kickoff) — unchanged logic
-        const firstSunday = computeFirstSundayKickoff(gamesData);
+        // 5) Global lock (first Sunday kickoff)
+        const firstSunday =
+          computeFirstSundayKickoff(
+            gamesData
+          );
         if (firstSunday) {
           if (now >= firstSunday) {
             setGlobalLocked(true);
-            setCountdown("Picks are now locked!");
+            setCountdown(
+              "Picks are now locked!"
+            );
           } else {
             setGlobalLocked(false);
             makeCountdown(firstSunday);
@@ -268,65 +359,116 @@ export default function PicksForm() {
           const hRes = await axios.get(
             `${import.meta.env.VITE_BACKEND_URL}/games/highlights/${week}`
           );
-          const h = hRes.data?.data || null;
+          if (cancelled) return;
+          const h =
+            hRes.data?.data || null;
           setGotwContext(h?.gotw || null);
           setPotwContext(h?.potw || null);
         } catch {
-          setGotwContext(null);
-          setPotwContext(null);
+          if (!cancelled) {
+            setGotwContext(null);
+            setPotwContext(null);
+          }
         }
       } catch (err) {
-        console.error("Error loading picks form:", err);
+        if (!cancelled) {
+          console.error(
+            "Error loading picks form:",
+            err
+          );
+        }
       } finally {
-        setLoading(false);
+        if (!cancelled) {
+          setLoading(false);
+        }
       }
     };
 
     run();
 
-    // cleanup interval
+    // cleanup countdown interval
     return () => {
-      if (countdownTimerRef.current) clearInterval(countdownTimerRef.current);
+      cancelled = true;
+      if (countdownTimerRef.current) {
+        clearInterval(
+          countdownTimerRef.current
+        );
+      }
     };
   }, [user, week, navigate, axiosConfig]);
 
   // ---------- submission ----------
+
   const handleSubmit = async (e) => {
     e.preventDefault();
 
     if (!selectedTeam) {
-      alert("Please select a team before submitting.");
+      alert(
+        "Please select a team before submitting."
+      );
       return;
     }
+
     if (globalLocked) {
-      alert("Picks are locked because the first Sunday game has kicked off.");
+      alert(
+        "Picks are locked because the first Sunday game has kicked off."
+      );
       return;
     }
 
-    // prevent using a previously used team (unless it's the same as the existing pick for this week)
+    // prevent reusing a team (unless it's the same as existing pick for this week)
     const tryingToReuse =
-      pickedTeams.includes(selectedTeam) && selectedTeam !== existingPickTeam;
+      pickedTeams.includes(
+        selectedTeam
+      ) &&
+      selectedTeam !==
+        existingPickTeam;
+
     if (tryingToReuse) {
-      alert(`You already used ${selectedTeam} earlier this season. Please choose a different team.`);
+      alert(
+        `You already used ${selectedTeam} earlier this season. Please choose a different team.`
+      );
       return;
     }
 
-    // prevent picking a game that has already kicked off
+    // ensure selected team is in a valid, unlocked game
     const gameForTeam = games.find(
-      (g) => g.home_team === selectedTeam || g.away_team === selectedTeam
+      (g) =>
+        g.home_team ===
+          selectedTeam ||
+        g.away_team ===
+          selectedTeam
     );
     if (!gameForTeam) {
-      alert("Unable to find the selected team's game. Please try again.");
+      alert(
+        "Unable to find the selected team's game. Please try again."
+      );
       return;
     }
-    if (lockedGames.includes(gameForTeam.id)) {
-      alert("That game has already kicked off. Please choose another game.");
+    if (
+      lockedGames.includes(
+        gameForTeam.id
+      )
+    ) {
+      alert(
+        "That game has already kicked off. Please choose another game."
+      );
       return;
     }
 
-    // numbers or null
-    const gotwVal = gotwPrediction === "" ? null : Number(gotwPrediction);
-    const potwVal = potwPrediction === "" ? null : Number(potwPrediction);
+    // numeric fields or null
+    const gotwVal =
+      gotwPrediction === ""
+        ? null
+        : Number(
+            gotwPrediction
+          );
+    const potwVal =
+      potwPrediction === ""
+        ? null
+        : Number(
+            potwPrediction
+          );
 
     try {
       await axios.post(
@@ -335,18 +477,31 @@ export default function PicksForm() {
           user_id: user.id,
           week: Number(week),
           team: selectedTeam,
-          potw_prediction: potwVal,
-          gotw_prediction: gotwVal,
+          potw_prediction:
+            potwVal,
+          gotw_prediction:
+            gotwVal,
         },
         {
           ...axiosConfig,
-          headers: { ...axiosConfig.headers, "Content-Type": "application/json" },
+          headers: {
+            ...axiosConfig.headers,
+            "Content-Type":
+              "application/json",
+          },
         }
       );
       navigate("/dashboard");
     } catch (error) {
-      console.error("Error submitting picks:", error);
-      alert(error.response?.data?.error || "Failed to submit picks. Please try again.");
+      console.error(
+        "Error submitting picks:",
+        error
+      );
+      alert(
+        error.response?.data
+          ?.error ||
+          "Failed to submit picks. Please try again."
+      );
     }
   };
 
@@ -354,187 +509,373 @@ export default function PicksForm() {
     navigate(`/picks/${e.target.value}`);
   };
 
-  if (loading) return <p>Loading game data...</p>;
+  if (loading) {
+    return (
+      <p>Loading game data...</p>
+    );
+  }
 
   // ---------- UI helpers ----------
+
   const isTeamAlreadyUsed = (team) =>
-    pickedTeams.includes(team) && team !== existingPickTeam;
+    pickedTeams.includes(team) &&
+    team !== existingPickTeam;
 
   const isGameLocked = (game) =>
-    globalLocked || lockedGames.includes(game.id);
+    globalLocked ||
+    lockedGames.includes(
+      game.id
+    );
+
+  // ---------- RENDER ----------
 
   return (
     <div className="max-w-xl mx-auto p-6">
       <div className="flex justify-between items-center mb-6">
-        <h2 className="text-2xl font-bold">Make Your Picks for Week {week}</h2>
-
+        <h2 className="text-2xl font-bold">
+          Make Your Picks for Week{" "}
+          {week}
+        </h2>
         <select
           value={week}
           onChange={handleWeekChange}
           className="border rounded px-2 py-1"
         >
-          {Array.from({ length: TOTAL_WEEKS }, (_, i) => {
-            const w = i + 1;
-            return (
-              <option key={w} value={w}>
-                Week {w}
-              </option>
-            );
-          })}
+          {Array.from(
+            { length: TOTAL_WEEKS },
+            (_, i) => {
+              const w = i + 1;
+              return (
+                <option
+                  key={w}
+                  value={w}
+                >
+                  Week {w}
+                </option>
+              );
+            }
+          )}
         </select>
       </div>
 
-      {/* Highlights (GOTW & POTW) */}
-      <HighlightsPanel week={week} className="mb-6" />
+      {/* GOTW / POTW Highlights */}
+      <HighlightsPanel
+        week={week}
+        className="mb-6"
+      />
 
+      {/* Countdown / global lock banner */}
       {!!countdown && (
         <div className="mb-4 p-3 rounded bg-red-50 border border-red-200 text-red-700">
           {countdown}
         </div>
       )}
 
-      {(selectedTeam || potwPrediction || gotwPrediction) && (
+      {/* Live summary */}
+      {(selectedTeam ||
+        potwPrediction !== "" ||
+        gotwPrediction !==
+          "") && (
         <div className="mb-6 p-4 border rounded bg-gray-100">
-          <h3 className="font-semibold mb-2">Your Picks (not yet submitted)</h3>
+          <h3 className="font-semibold mb-2">
+            Your Picks (not yet
+            submitted)
+          </h3>
           {selectedTeam && (
             <p>
-              ⚡ Team Pick: <strong>{selectedTeam}</strong>
-              {selectedTeam === existingPickTeam && " (currently saved for this week)"}
+              ⚡ Team Pick:{" "}
+              <strong>
+                {selectedTeam}
+              </strong>
+              {selectedTeam ===
+                existingPickTeam &&
+                " (currently saved for this week)"}
             </p>
           )}
-          {gotwPrediction !== "" && (
+          {gotwPrediction !==
+            "" && (
             <p>
-              🎯 GOTW Total Points: <strong>{gotwPrediction}</strong>
+              🎯 GOTW Total
+              Points:{" "}
+              <strong>
+                {
+                  gotwPrediction
+                }
+              </strong>
             </p>
           )}
-          {potwPrediction !== "" && (
+          {potwPrediction !==
+            "" && (
             <p>
-              🏈 POTW Yardage: <strong>{potwPrediction}</strong>
+              🏈 POTW Yardage:{" "}
+              <strong>
+                {
+                  potwPrediction
+                }
+              </strong>
             </p>
           )}
         </div>
       )}
 
-      <form onSubmit={handleSubmit} className="space-y-6">
+      {/* Games list & pick options */}
+      <form
+        onSubmit={handleSubmit}
+        className="space-y-6"
+      >
         {games.map((game) => {
-          const locked = isGameLocked(game);
-          const k = kickoffDate(game);
+          const locked =
+            isGameLocked(
+              game
+            );
+          const k =
+            kickoffDate(
+              game
+            );
 
           return (
             <div
               key={game.id}
-              className={`border rounded p-4 ${locked ? "opacity-60" : ""}`}
+              className={`border rounded p-4 ${
+                locked
+                  ? "opacity-60"
+                  : ""
+              }`}
             >
               <div className="flex items-center justify-between mb-2">
                 <h3 className="font-semibold">
-                  {game.home_team} vs {game.away_team}
+                  {game.home_team}{" "}
+                  vs{" "}
+                  {
+                    game.away_team
+                  }
                 </h3>
                 <div className="text-sm text-gray-600">
-                  {k ? `${formatAzTime(k)} (AZ)` : "Kickoff: TBA"}
+                  {k
+                    ? `${k.toLocaleString()} (local)`
+                    : "Kickoff: TBA"}
                 </div>
               </div>
 
-              <div className="mb-2">
-                <span className="font-medium">Betting Odds:</span>{" "}
-                {game.favorite ?? "—"}{game.spread != null ? ` - ${game.spread}` : ""}
+              <div className="mb-2 text-sm">
+                <span className="font-medium">
+                  Betting Odds:
+                </span>{" "}
+                {game.favorite
+                  ? `${game.favorite}${
+                      game.spread !=
+                      null
+                        ? ` -${game.spread}`
+                        : ""
+                    }`
+                  : "—"}
               </div>
 
               <div className="flex flex-wrap gap-3">
-                {[game.home_team, game.away_team].map((team) => {
-                  const isFavorite = game.favorite ? team === game.favorite : null;
-                  const selected = selectedTeam === team;
-                  const alreadyUsed = isTeamAlreadyUsed(team);
-                  const disabled = locked || alreadyUsed;
+                {[
+                  game.home_team,
+                  game.away_team,
+                ].map(
+                  (
+                    team
+                  ) => {
+                    const isFavorite =
+                      game.favorite
+                        ? team ===
+                          game.favorite
+                        : null;
+                    const selected =
+                      selectedTeam ===
+                      team;
+                    const alreadyUsed =
+                      isTeamAlreadyUsed(
+                        team
+                      );
+                    const disabled =
+                      locked ||
+                      alreadyUsed;
 
-                  return (
-                    <label
-                      key={team}
-                      className={[
+                    const classes =
+                      [
                         "flex items-center gap-2 border rounded px-3 py-2 cursor-pointer transition-all",
-                        selected ? "bg-blue-200 border-blue-500 font-semibold" : "",
-                        !selected && isFavorite === true ? "bg-yellow-100 border-yellow-400" : "",
-                        !selected && isFavorite === false ? "bg-green-100 border-green-400" : "",
-                        disabled ? "opacity-50 cursor-not-allowed line-through" : "hover:shadow-md hover:scale-[1.01]",
-                      ].join(" ")}
-                      title={
-                        locked
-                          ? "This game has already kicked off."
-                          : alreadyUsed
-                          ? "You already used this team earlier this season."
-                          : isFavorite === true
-                          ? "Favorite (1 point if correct)"
-                          : isFavorite === false
-                          ? "Underdog (2 points if correct)"
-                          : "Pick"
-                      }
-                    >
-                      <input
-                        type="radio"
-                        name={`teamSelection-${game.id}`}
-                        value={team}
-                        disabled={disabled}
-                        checked={selected}
-                        onChange={() => setSelectedTeam(team)}
-                      />
-                      <span className="flex items-center gap-2">
-                        <span>{team}</span>
-                        {isFavorite === true && <span aria-hidden>⭐</span>}
-                        {alreadyUsed && (
-                          <span className="text-xs bg-gray-200 px-1 rounded">Used</span>
-                        )}
-                        {selected && <span aria-hidden>✔️</span>}
-                      </span>
-                    </label>
-                  );
-                })}
+                        selected
+                          ? "bg-blue-200 border-blue-500 font-semibold"
+                          : "",
+                        !selected &&
+                        isFavorite ===
+                          true
+                          ? "bg-yellow-100 border-yellow-400"
+                          : "",
+                        !selected &&
+                        isFavorite ===
+                          false
+                          ? "bg-green-100 border-green-400"
+                          : "",
+                        disabled
+                          ? "opacity-50 cursor-not-allowed line-through"
+                          : "hover:shadow-md hover:scale-[1.01]",
+                      ].join(
+                        " "
+                      );
+
+                    const title =
+                      locked
+                        ? "This game has already kicked off."
+                        : alreadyUsed
+                        ? "You already used this team earlier this season."
+                        : isFavorite ===
+                          true
+                        ? "Favorite (1 point if correct)"
+                        : isFavorite ===
+                          false
+                        ? "Underdog (2 points if correct)"
+                        : "Pick";
+
+                    return (
+                      <label
+                        key={
+                          team
+                        }
+                        className={
+                          classes
+                        }
+                        title={
+                          title
+                        }
+                      >
+                        <input
+                          type="radio"
+                          name={`teamSelection-${game.id}`}
+                          value={
+                            team
+                          }
+                          disabled={
+                            disabled
+                          }
+                          checked={
+                            selected
+                          }
+                          onChange={() =>
+                            setSelectedTeam(
+                              team
+                            )
+                          }
+                        />
+                        <span className="flex items-center gap-2">
+                          <span>
+                            {
+                              team
+                            }
+                          </span>
+                          {isFavorite ===
+                            true && (
+                            <span aria-hidden>
+                              ⭐
+                            </span>
+                          )}
+                          {alreadyUsed && (
+                            <span className="text-xs bg-gray-200 px-1 rounded">
+                              Used
+                            </span>
+                          )}
+                          {selected && (
+                            <span aria-hidden>
+                              ✔️
+                            </span>
+                          )}
+                        </span>
+                      </label>
+                    );
+                  }
+                )}
               </div>
 
               {locked && (
                 <p className="mt-2 text-sm text-red-600">
-                  Game locked: Already kicked off or global lock active.
+                  Game locked:
+                  Already kicked off
+                  or global lock
+                  active.
                 </p>
               )}
             </div>
           );
         })}
 
-        {/* GOTW / POTW inputs */}
+        {/* GOTW / POTW inputs with context */}
         <div className="grid grid-cols-1 gap-4">
           <div>
             <label className="block mb-1 font-medium">
-              GOTW Total Points
-              {gotwContext ? (
+              GOTW Total
+              Points
+              {gotwContext && (
                 <span className="ml-2 text-xs text-gray-600">
-                  ({gotwContext.away_team} @ {gotwContext.home_team})
+                  (
+                  {
+                    gotwContext.away_team
+                  }{" "}
+                  @{" "}
+                  {
+                    gotwContext.home_team
+                  }
+                  )
                 </span>
-              ) : null}
+              )}
             </label>
             <input
               type="number"
               min={0}
-              value={gotwPrediction}
-              onChange={(e) => setGotwPrediction(e.target.value)}
+              value={
+                gotwPrediction
+              }
+              onChange={(e) =>
+                setGotwPrediction(
+                  e
+                    .target
+                    .value
+                )
+              }
               className="border rounded px-2 py-1 w-full"
-              disabled={globalLocked}
+              disabled={
+                globalLocked
+              }
               placeholder="e.g., 41"
             />
           </div>
+
           <div>
             <label className="block mb-1 font-medium">
               POTW Yardage
-              {potwContext ? (
+              {potwContext && (
                 <span className="ml-2 text-xs text-gray-600">
-                  ({potwContext.player}{potwContext.team ? ` — ${potwContext.team}` : ""})
+                  (
+                  {
+                    potwContext.player
+                  }
+                  {potwContext.team
+                    ? ` — ${potwContext.team}`
+                    : ""}
+                  )
                 </span>
-              ) : null}
+              )}
             </label>
             <input
               type="number"
               min={0}
-              value={potwPrediction}
-              onChange={(e) => setPotwPrediction(e.target.value)}
+              value={
+                potwPrediction
+              }
+              onChange={(e) =>
+                setPotwPrediction(
+                  e
+                    .target
+                    .value
+                )
+              }
               className="border rounded px-2 py-1 w-full"
-              disabled={globalLocked}
+              disabled={
+                globalLocked
+              }
               placeholder="e.g., 95"
             />
           </div>
@@ -543,9 +884,13 @@ export default function PicksForm() {
         <div className="flex items-center gap-3">
           <button
             type="submit"
-            disabled={globalLocked || !selectedTeam}
+            disabled={
+              globalLocked ||
+              !selectedTeam
+            }
             className={`mt-2 px-6 py-2 rounded text-white font-bold ${
-              globalLocked || !selectedTeam
+              globalLocked ||
+              !selectedTeam
                 ? "bg-gray-400 cursor-not-allowed"
                 : "bg-blue-600 hover:bg-blue-700"
             }`}
@@ -555,7 +900,11 @@ export default function PicksForm() {
 
           <button
             type="button"
-            onClick={() => navigate(`/leaderboard/week/${week}`)}
+            onClick={() =>
+              navigate(
+                `/leaderboard/week/${week}`
+              )
+            }
             className="mt-2 px-6 py-2 rounded bg-emerald-600 text-white hover:bg-emerald-700"
           >
             Weekly Leaderboard
